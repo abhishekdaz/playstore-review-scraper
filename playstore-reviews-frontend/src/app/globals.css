@@ -1,0 +1,296 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222.2 84% 4.9%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222.2 84% 4.9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221.2 83.2% 53.3%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 84% 4.9%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 224.3 76.3% 94.1%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar for dark theme */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgb(30 41 59 / 0.3);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(99 102 241 / 0.5);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgb(99 102 241 / 0.8);
+}
+
+/* ===== CUSTOM COMPONENT STYLES ===== */
+
+/* Custom scrollbar styling for review containers */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(99 102 241 / 0.5) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgb(30 41 59 / 0.3);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, rgb(99 102 241 / 0.6), rgb(139 92 246 / 0.6));
+  border-radius: 3px;
+  transition: background 0.3s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, rgb(99 102 241 / 0.8), rgb(139 92 246 / 0.8));
+}
+
+/* Enhanced checkbox styling */
+input[type="checkbox"] {
+  appearance: none;
+  background-color: rgb(51 65 85);
+  border: 1px solid rgb(100 116 139);
+  border-radius: 4px;
+  width: 16px;
+  height: 16px;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+input[type="checkbox"]:checked {
+  background-color: rgb(147 51 234);
+  border-color: rgb(147 51 234);
+  background-image: url("data:image/svg+xml,%3csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3e%3cpath d='m13.854 3.646-7.5 7.5a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6 10.293l7.146-7.147a.5.5 0 0 1 .708.708z'/%3e%3c/svg%3e");
+  background-size: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+input[type="checkbox"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(147 51 234 / 0.3);
+}
+
+input[type="checkbox"]:hover {
+  border-color: rgb(147 51 234);
+}
+
+/* Smooth transitions for interactive elements */
+.transition-all {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 200ms;
+}
+
+/* Loading animation refinements */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Enhanced card hover effects */
+.card-hover-effect {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-hover-effect:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 20px 25px -5px rgb(0 0 0 / 0.1),
+    0 10px 10px -5px rgb(0 0 0 / 0.04);
+}
+
+/* Glassmorphism enhancement */
+.backdrop-blur-sm {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* Button enhancements */
+.btn-gradient {
+  background: linear-gradient(135deg, rgb(147 51 234), rgb(59 130 246));
+  transition: all 0.3s ease;
+}
+
+.btn-gradient:hover {
+  background: linear-gradient(135deg, rgb(126 34 206), rgb(37 99 235));
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgb(0 0 0 / 0.2);
+}
+
+.btn-export {
+  background: linear-gradient(135deg, rgb(34 197 94), rgb(16 185 129));
+  transition: all 0.3s ease;
+}
+
+.btn-export:hover {
+  background: linear-gradient(135deg, rgb(22 163 74), rgb(5 150 105));
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgb(0 0 0 / 0.2);
+}
+
+/* Rating badge animations */
+.rating-badge {
+  transition: all 0.2s ease;
+}
+
+.rating-badge:hover {
+  transform: scale(1.05);
+}
+
+/* Search result item styling */
+.search-result-item {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+}
+
+.search-result-item:hover {
+  transform: translateX(4px);
+  background-color: rgb(51 65 85 / 0.7);
+}
+
+/* Review card styling */
+.review-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgb(71 85 105 / 0.3);
+}
+
+.review-card:hover {
+  border-color: rgb(99 102 241 / 0.5);
+  background-color: rgb(51 65 85 / 0.5);
+  transform: translateY(-1px);
+}
+
+/* Progress bar for loading states */
+.loading-bar {
+  background: linear-gradient(90deg, transparent, rgb(147 51 234 / 0.5), transparent);
+  animation: loading-sweep 1.5s infinite;
+}
+
+@keyframes loading-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Responsive design enhancements */
+@media (max-width: 768px) {
+  .mobile-stack {
+    flex-direction: column;
+  }
+  
+  .mobile-full {
+    width: 100%;
+  }
+  
+  .mobile-text-sm {
+    font-size: 0.875rem;
+  }
+}
+
+/* Focus indicators for accessibility */
+.focus-ring {
+  transition: box-shadow 0.2s ease;
+}
+
+.focus-ring:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(147 51 234 / 0.5);
+}
+
+/* Error message styling */
+.error-message {
+  background: linear-gradient(135deg, rgb(239 68 68 / 0.1), rgb(220 38 38 / 0.1));
+  border: 1px solid rgb(239 68 68 / 0.3);
+  color: rgb(252 165 165);
+}
+
+/* Success message styling */
+.success-message {
+  background: linear-gradient(135deg, rgb(34 197 94 / 0.1), rgb(22 163 74 / 0.1));
+  border: 1px solid rgb(34 197 94 / 0.3);
+  color: rgb(134 239 172);
+}
+
+/* Custom selection styling */
+::selection {
+  background-color: rgb(147 51 234 / 0.3);
+  color: rgb(248 250 252);
+}
+
+::-moz-selection {
+  background-color: rgb(147 51 234 / 0.3);
+  color: rgb(248 250 252);
+}

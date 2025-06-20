@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Node.js (Frontend)
+playstore-reviews-frontend/node_modules/
+playstore-reviews-frontend/.next/
+playstore-reviews-frontend/out/
+playstore-reviews-frontend/.env.local
+playstore-reviews-frontend/.env.development.local
+playstore-reviews-frontend/.env.test.local
+playstore-reviews-frontend/.env.production.local
+playstore-reviews-frontend/.vercel
+playstore-reviews-frontend/npm-debug.log*
+playstore-reviews-frontend/yarn-debug.log*
+playstore-reviews-frontend/yarn-error.log*
+
+# Logs
+*.log
+logs/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+.nyc_output
+
+# Dependency directories
+node_modules/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Data files
+*.csv
+*.json
+data/
+downloads/
+
+# Test files
+test_*.py
+temp_*
+
+# NLTK downloads
+nltk_data/
+
+# Model files
+*.pkl
+*.joblib
+models/ 
