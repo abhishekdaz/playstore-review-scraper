@@ -26,6 +26,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { API_ENDPOINTS } from "@/lib/config";
 
 // ===== INTERFACES =====
 interface Review {
@@ -212,7 +213,7 @@ export default function Home() {
     setError("");
     
     try {
-      const response = await fetch("http://localhost:8000/search", {
+      const response = await fetch(API_ENDPOINTS.search, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: searchQuery, limit: 10 })
@@ -245,7 +246,7 @@ export default function Home() {
         star_filters: selectedStars.length > 0 ? selectedStars : undefined
       };
 
-      const response = await fetch("http://localhost:8000/reviews", {
+      const response = await fetch(API_ENDPOINTS.reviews, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -283,7 +284,7 @@ export default function Home() {
         include_classification: true
       };
 
-      const response = await fetch("http://localhost:8000/analyze", {
+      const response = await fetch(API_ENDPOINTS.analyze, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -316,7 +317,7 @@ export default function Home() {
         star_filters: selectedStars.length > 0 ? selectedStars : undefined
       };
 
-      const response = await fetch("http://localhost:8000/reviews/csv", {
+      const response = await fetch(API_ENDPOINTS.reviewsCsv, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
