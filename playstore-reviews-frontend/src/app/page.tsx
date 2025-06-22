@@ -93,6 +93,14 @@ interface AnalysisInsights {
     review_count: number;
     percentage: number;
   }>;
+  critical_themes: Array<{
+    theme_name: string;
+    keywords: string[];
+    review_count: number;
+    percentage: number;
+    severity: string;
+    problematic_phrases: string[];
+  }>;
   urgency_score: number;
   summary: {
     total_reviews_analyzed: number;
@@ -821,7 +829,7 @@ export default function Home() {
                           <div>
                             <div className="font-semibold text-white">{feature.feature_type}</div>
                             <div className="text-sm text-gray-400">
-                              {feature.requests} requests ({feature.percentage}% of reviews)
+                              {feature.requests} word requests ({feature.percentage}% of reviews)
                             </div>
                           </div>
                         </div>
@@ -946,13 +954,47 @@ export default function Home() {
               </CardContent>
             </Card>
 
+            {/* Critical Negative Themes */}
+            {analysisResults.insights.critical_themes?.length > 0 && (
+              <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 border-red-500/30">
+                <CardHeader>
+                  <CardTitle className="text-2xl text-red-400">🚨 Critical Negative Themes</CardTitle>
+                  <CardDescription className="text-gray-300">
+                    Key problems and issues identified from negative reviews (most reliable data)
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {analysisResults.insights.critical_themes.map((theme, index) => (
+                      <div key={index} className="p-4 bg-red-900/20 rounded-lg border border-red-700/30">
+                        <div className="font-semibold text-red-300 mb-2">{theme.theme_name}</div>
+                        <div className="text-sm text-gray-400 mb-3">
+                          {theme.review_count} negative reviews ({theme.percentage}%)
+                        </div>
+                        <div className="flex flex-wrap gap-1 mb-3">
+                          {theme.keywords.map((keyword, i) => (
+                            <Badge key={i} variant="outline" className="text-xs text-red-300 border-red-600">
+                              {keyword}
+                            </Badge>
+                          ))}
+                        </div>
+                        <div className="text-xs text-red-400 font-medium">
+                          Severity: {theme.severity || 'High'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {/* Key Themes */}
             {analysisResults.insights.key_themes?.length > 0 && (
               <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
                 <CardHeader>
-                  <CardTitle className="text-2xl text-white">🏷️ Key Themes</CardTitle>
+                  <CardTitle className="text-2xl text-white">🏷️ All Themes</CardTitle>
                   <CardDescription className="text-gray-300">
-                    Main topics and themes extracted from reviews
+                    Main topics and themes extracted from reviews (positive themes may include paid reviews)
                   </CardDescription>
                 </CardHeader>
                 <CardContent>

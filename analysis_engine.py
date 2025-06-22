@@ -876,6 +876,7 @@ class ReviewAnalysisEngine:
             'sentiment_trends': {},
             'recommendations': [],
             'key_themes': [],
+            'critical_themes': [],
             'urgency_score': 0,
             'summary': {}
         }
@@ -996,6 +997,9 @@ class ReviewAnalysisEngine:
         
         # Generate Summary
         insights['summary'] = self._generate_summary(analysis_results, insights)
+        
+        # Generate Critical Negative Themes (most reliable data)
+        insights['critical_themes'] = self._extract_critical_negative_themes(analysis_results)
         
         return insights
 
@@ -1266,6 +1270,144 @@ class ReviewAnalysisEngine:
             summary['top_opportunity'] = f"{top_feature['feature']} ({top_feature['count']} requests)"
         
         return summary
+
+    def _extract_critical_negative_themes(self, analysis_results: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Extract critical themes from negative reviews only (most reliable data)
+        Focuses on 1-3 star reviews to avoid paid review contamination
+        """
+        critical_themes = []
+        
+        # Get reviews with sentiment analysis
+        if 'sentiment_analysis' not in analysis_results:
+            return critical_themes
+            
+        sentiment_data = analysis_results['sentiment_analysis']
+        reviews_with_sentiment = sentiment_data.get('reviews_with_sentiment', [])
+        
+        # Filter to negative reviews only (1-3 star ratings)
+        negative_reviews = [
+            review for review in reviews_with_sentiment 
+            if review.get('rating', 5) <= 3
+        ]
+        
+        if len(negative_reviews) == 0:
+            return critical_themes
+        
+        # Define critical problem themes with specific phrases
+        problem_themes = {
+            'Crashes & Bugs': {
+                'keywords': ['crash', 'bug', 'freeze', 'hang', 'broken', 'error', 'glitch', 'stops working'],
+                'problematic_phrases': [
+                    'app crashes', 'keeps crashing', 'always crashes', 'crashes constantly',
+                    'frozen screen', 'app freezes', 'stops responding', 'not working',
+                    'broken feature', 'major bug', 'full of bugs', 'buggy app'
+                ]
+            },
+            'Performance Issues': {
+                'keywords': ['slow', 'lag', 'loading', 'timeout', 'delayed', 'stuck', 'wait'],
+                'problematic_phrases': [
+                    'very slow', 'too slow', 'slow loading', 'takes forever',
+                    'lag issues', 'laggy app', 'performance issues', 'slow response',
+                    'stuck loading', 'timeout error', 'loading problems'
+                ]
+            },
+            'Login & Account Problems': {
+                'keywords': ['login', 'password', 'account', 'authentication', 'sign in', 'verification'],
+                'problematic_phrases': [
+                    'cannot login', 'login failed', 'password not working', 'login issues',
+                    'account locked', 'verification problems', 'sign in error',
+                    'authentication failed', 'login not working'
+                ]
+            },
+            'Payment & Billing Issues': {
+                'keywords': ['payment', 'billing', 'charge', 'money', 'refund', 'subscription', 'premium'],
+                'problematic_phrases': [
+                    'billing problems', 'wrong charge', 'payment failed', 'money issues',
+                    'refund request', 'unwanted charges', 'billing error', 'payment not working',
+                    'subscription issues', 'premium not working'
+                ]
+            },
+            'User Interface Problems': {
+                'keywords': ['confusing', 'difficult', 'hard to use', 'navigation', 'interface', 'design'],
+                'problematic_phrases': [
+                    'confusing interface', 'hard to navigate', 'poor design', 'bad UI',
+                    'difficult to use', 'navigation problems', 'interface issues',
+                    'unclear layout', 'design problems'
+                ]
+            },
+            'Fake Profiles & Scams': {
+                'keywords': ['fake', 'scam', 'fraud', 'catfish', 'bot', 'spam'],
+                'problematic_phrases': [
+                    'fake profiles', 'too many fakes', 'scam app', 'fraudulent',
+                    'fake users', 'catfish profiles', 'spam messages', 'bot accounts',
+                    'fake photos', 'scammer alert'
+                ]
+            },
+            'Poor Customer Support': {
+                'keywords': ['support', 'help', 'customer service', 'response', 'contact'],
+                'problematic_phrases': [
+                    'no response', 'poor support', 'customer service issues', 'no help',
+                    'support not helpful', 'cannot contact', 'no customer service',
+                    'support problems', 'unresponsive support'
+                ]
+            }
+        }
+        
+        # Analyze each theme
+        for theme_name, theme_data in problem_themes.items():
+            matching_reviews = []
+            found_phrases = []
+            
+            for review in negative_reviews:
+                review_text = review.get('review', '').lower()
+                if not review_text:
+                    review_text = review.get('content', '').lower()
+                
+                # Check for keyword matches
+                keyword_matches = [kw for kw in theme_data['keywords'] if kw in review_text]
+                
+                # Check for specific problematic phrases
+                phrase_matches = [phrase for phrase in theme_data['problematic_phrases'] if phrase in review_text]
+                
+                if keyword_matches or phrase_matches:
+                    matching_reviews.append(review)
+                    found_phrases.extend(phrase_matches)
+                    found_phrases.extend(keyword_matches)
+            
+            # Only include themes with significant negative mentions
+            if len(matching_reviews) >= 2:  # At least 2 negative reviews mentioning the issue
+                # Determine severity based on frequency and rating severity
+                avg_rating = sum(r.get('rating', 1) for r in matching_reviews) / len(matching_reviews)
+                frequency_percentage = (len(matching_reviews) / len(negative_reviews)) * 100
+                
+                # Severity calculation
+                if avg_rating <= 1.5 and frequency_percentage >= 20:
+                    severity = 'Critical'
+                elif avg_rating <= 2.0 and frequency_percentage >= 15:
+                    severity = 'High'
+                elif frequency_percentage >= 10:
+                    severity = 'Medium'
+                else:
+                    severity = 'Low'
+                
+                # Get unique phrases and keywords
+                unique_phrases = list(set(found_phrases))[:10]  # Top 10 unique phrases
+                
+                critical_themes.append({
+                    'theme_name': theme_name,
+                    'keywords': theme_data['keywords'][:8],  # Top 8 keywords
+                    'review_count': len(matching_reviews),
+                    'percentage': round(frequency_percentage, 1),
+                    'severity': severity,
+                    'problematic_phrases': unique_phrases
+                })
+        
+        # Sort by severity and frequency
+        severity_order = {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3}
+        critical_themes.sort(key=lambda x: (severity_order.get(x['severity'], 4), -x['review_count']))
+        
+        return critical_themes[:6]  # Return top 6 critical themes
 
     def comprehensive_analysis(self, reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
