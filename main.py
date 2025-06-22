@@ -7,10 +7,11 @@ from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
-from google_play_scraper import reviews, Sort, search
+from google_play_scraper import reviews, Sort, search, app
 import re
 import csv
 import io
+import pandas as pd
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import asyncio
@@ -154,6 +155,8 @@ class ReviewRequest(BaseModel):
     url: str = Field(..., description="Play Store URL of the app")
     count: int = Field(default=100, ge=1, le=5000, description="Number of reviews to fetch (1-5000)")
     star_filters: Optional[List[int]] = Field(default=None, description="List of star ratings to filter by (1-5)")
+    negative_only: bool = Field(default=False, description="Export only negative reviews (1-2 stars)")
+    export_format: str = Field(default="csv", description="Export format: 'csv' or 'xlsx'")
 
 class SearchRequest(BaseModel):
     """Request model for searching apps"""
@@ -327,6 +330,41 @@ async def run_analysis_async(reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
         logger.error(f"Async analysis execution failed: {e}")
         raise ValueError(f"Analysis failed: {str(e)}") from e
 
+def get_app_metadata(app_id: str) -> Dict[str, Any]:
+    """
+    Fetch app metadata including total reviews and rating distribution
+    
+    Args:
+        app_id: Google Play app ID
+        
+    Returns:
+        Dictionary containing app metadata or empty dict if failed
+    """
+    try:
+        if not SCRAPER_AVAILABLE:
+            return {}
+            
+        app_info = app(app_id, lang="en", country="us")
+        
+        # Extract relevant metadata
+        metadata = {
+            "title": app_info.get("title", ""),
+            "developer": app_info.get("developer", ""),
+            "total_ratings": app_info.get("ratings", 0),  # Total number of ratings
+            "total_reviews": app_info.get("reviews", 0),  # Total number of written reviews
+            "average_score": app_info.get("score", 0),    # Average rating score
+            "histogram": app_info.get("histogram", {}),   # Star distribution
+            "installs": app_info.get("installs", ""),
+            "updated": app_info.get("updated", ""),
+            "version": app_info.get("version", "")
+        }
+        
+        return metadata
+        
+    except Exception as e:
+        print(f"Error fetching app metadata: {e}")
+        return {}
+
 # ===== API ENDPOINTS =====
 @app.get("/", tags=["Health"])
 async def root():
@@ -426,10 +464,23 @@ async def get_reviews(payload: ReviewRequest):
         if payload.star_filters:
             formatted_reviews = filter_reviews_by_rating(formatted_reviews, payload.star_filters)
         
+        # Calculate rating distribution before filtering
+        rating_distribution = {str(i): 0 for i in range(1, 6)}
+        for review in result:  # Use original result for accurate distribution
+            rating_str = str(review["score"])
+            if rating_str in rating_distribution:
+                rating_distribution[rating_str] += 1
+        
+        # Fetch app metadata for total stats
+        app_metadata = get_app_metadata(app_id)
+        
         return {
             "app_id": app_id,
             "reviews": formatted_reviews,
             "total_reviews": len(formatted_reviews),
+            "total_fetched": len(result),  # Total before filtering
+            "rating_distribution": rating_distribution,
+            "app_metadata": app_metadata,  # Total app stats from Play Store
             "requested_count": payload.count,
             "applied_filters": payload.star_filters or [],
             "fetch_timestamp": datetime.now().isoformat()
@@ -808,6 +859,156 @@ async def analyze_with_configuration(request: DirectAnalysisRequest):
     except Exception as e:
         logger.error(f"Error in configured analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/analyze/advanced", response_model=Dict[str, Any], tags=["Analysis"])
+async def analyze_reviews_advanced(payload: DirectAnalysisRequest):
+    """
+    Advanced AI Analysis with Business Intelligence
+    
+    Provides deeper insights including:
+    - Business impact signals (revenue risk, churn indicators)
+    - Emotional intensity analysis beyond sentiment
+    - Competitive intelligence extraction
+    - Actionable pain points with user solutions
+    - Smart feature prioritization with urgency
+    - Advanced aspect-based sentiment analysis
+    """
+    if not ANALYSIS_ENABLED:
+        raise HTTPException(status_code=503, detail="Analysis engine not available.")
+    
+    try:
+        if not payload.reviews or len(payload.reviews) == 0:
+            raise HTTPException(status_code=400, detail="No reviews provided for advanced analysis")
+        
+        logger.info(f"Starting advanced AI analysis of {len(payload.reviews)} reviews")
+        
+        # Validate and format reviews
+        formatted_reviews = []
+        for i, review in enumerate(payload.reviews):
+            if not isinstance(review, dict):
+                raise HTTPException(status_code=400, detail=f"Review {i} must be a dictionary")
+            
+            content = review.get('content') or review.get('review', '')
+            if not content.strip():
+                continue
+                
+            formatted_review = {
+                "review_id": review.get('review_id', f"review_{i}"),
+                "text": content,
+                "content": content,
+                "rating": int(review.get('rating', 3)),
+                "date": review.get('date', datetime.now().isoformat())
+            }
+            formatted_reviews.append(formatted_review)
+        
+        if not formatted_reviews:
+            raise HTTPException(status_code=400, detail="No valid reviews found after processing")
+        
+        # Run advanced analysis
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, analysis_engine.advanced_analysis, formatted_reviews)
+        
+        if 'error' in result:
+            raise HTTPException(status_code=400, detail=result['error'])
+        
+        logger.info("Advanced AI analysis completed successfully")
+        return {
+            "success": True,
+            "message": "Advanced AI analysis completed successfully",
+            "data": result,
+            "analysis_type": "advanced_ai",
+            "total_reviews_analyzed": len(formatted_reviews),
+            "processing_timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException as he:
+        logger.error(f"Advanced analysis HTTP error: {he.detail}")
+        raise he
+    except Exception as e:
+        logger.error(f"Advanced analysis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Advanced analysis failed: {str(e)}")
+
+@app.post("/analyze/sentiment_separation", response_model=Dict[str, Any], tags=["Analysis"])
+async def analyze_sentiment_separation(payload: DirectAnalysisRequest):
+    """
+    Separate Sentiment Analysis
+    
+    Separates reviews into positive and negative sentiment themes with detailed analysis:
+    
+    **Positive Themes:**
+    - Design & Interface Praise
+    - Functionality Appreciation  
+    - Feature Appreciation
+    - Ease of Use
+    - Performance Excellence
+    - Overall Satisfaction
+    
+    **Negative Themes:**
+    - Usability Problems
+    - Performance Problems
+    - Feature Complaints
+    - Functionality Problems
+    - Design & Interface Issues
+    - Overall Dissatisfaction
+    
+    Each theme includes:
+    - Actual review texts with highlighted phrases
+    - Satisfaction/Severity levels
+    - Percentage breakdowns
+    - Review count statistics
+    """
+    if not ANALYSIS_ENABLED:
+        raise HTTPException(status_code=503, detail="Analysis engine not available.")
+    
+    try:
+        if not payload.reviews or len(payload.reviews) == 0:
+            raise HTTPException(status_code=400, detail="No reviews provided for sentiment analysis")
+        
+        logger.info(f"Starting sentiment separation analysis of {len(payload.reviews)} reviews")
+        
+        # Validate and format reviews
+        formatted_reviews = []
+        for i, review in enumerate(payload.reviews):
+            if not isinstance(review, dict):
+                raise HTTPException(status_code=400, detail=f"Review {i} must be a dictionary")
+            
+            content = review.get('content') or review.get('review', '')
+            if not content.strip():
+                continue
+                
+            formatted_review = {
+                "review": content,
+                "rating": int(review.get('rating', 3)),
+                "date": review.get('date', datetime.now().isoformat())
+            }
+            formatted_reviews.append(formatted_review)
+        
+        if not formatted_reviews:
+            raise HTTPException(status_code=400, detail="No valid reviews found after processing")
+        
+        # Run sentiment separation analysis
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, analysis_engine.separate_sentiment_analysis, formatted_reviews)
+        
+        if 'error' in result:
+            raise HTTPException(status_code=400, detail=result['error'])
+        
+        logger.info("Sentiment separation analysis completed successfully")
+        return {
+            "success": True,
+            "message": "Sentiment separation analysis completed successfully",
+            "data": result,
+            "analysis_type": "sentiment_separation",
+            "total_reviews_analyzed": len(formatted_reviews),
+            "processing_timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException as he:
+        logger.error(f"Sentiment separation HTTP error: {he.detail}")
+        raise he
+    except Exception as e:
+        logger.error(f"Sentiment separation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Sentiment separation failed: {str(e)}")
 
 @app.post("/segment_reviews", response_model=Dict[str, Any], tags=["Analysis"])
 async def segment_reviews_by_themes(payload: DirectAnalysisRequest):

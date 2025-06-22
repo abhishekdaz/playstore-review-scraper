@@ -13,6 +13,7 @@ import string
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from datetime import datetime
+import traceback
 
 # Configure logging first
 logging.basicConfig(level=logging.INFO)
@@ -663,52 +664,87 @@ class ReviewAnalysisEngine:
                 
                 # Classify based on configured categories
                 for category_id, category_config in self.categories.items():
-                    keywords = category_config.keywords
-                    
-                    for keyword in keywords:
-                        if keyword in text:
-                            # Calculate a simple score based on rating (lower rating = higher severity)
-                            severity_score = (6 - rating) * category_config.priority_multiplier
+                    # Handle feature requests with subcategories
+                    if category_id == 'feature_requests':
+                        # Check for feature request keywords first
+                        has_feature_request = any(keyword in text for keyword in category_config.keywords)
+                        
+                        if has_feature_request:
+                            # Now check subcategories for specific feature types
+                            matched_subcategory = None
+                            matched_keyword = None
                             
-                            if category_id.startswith('ux_'):
-                                ux_issues_found[category_id].append({
+                            for subcategory, subcategory_keywords in category_config.subcategories.items():
+                                for subkeyword in subcategory_keywords:
+                                    if subkeyword in text:
+                                        matched_subcategory = subcategory
+                                        matched_keyword = subkeyword
+                                        break
+                                if matched_subcategory:
+                                    break
+                            
+                            # Use subcategory if found, otherwise general feature request
+                            if matched_subcategory:
+                                priority_score = (6 - rating) * category_config.priority_multiplier
+                                feature_requests_found[matched_subcategory].append({
                                     'review': review,
-                                    'keyword': keyword,
-                                    'severity_score': severity_score,
+                                    'keyword': matched_keyword,
+                                    'priority_score': priority_score,
                                     'text_snippet': text[:100] + '...' if len(text) > 100 else text
                                 })
-                            elif category_id.startswith('feature_'):
-                                feature_requests_found[category_id].append({
-                                    'review': review,
-                                    'keyword': keyword,
-                                    'priority_score': severity_score,
-                                    'text_snippet': text[:100] + '...' if len(text) > 100 else text
-                                })
-                            elif category_id.startswith('critical_'):
-                                critical_complaints_found[category_id].append({
-                                    'review': review,
-                                    'keyword': keyword,
-                                    'severity_score': severity_score,
-                                    'text_snippet': text[:150] + '...' if len(text) > 150 else text,
-                                    'alert_priority': 'CRITICAL'
-                                })
-                            elif category_id.startswith('tech_'):
-                                tech_issues_found[category_id].append({
-                                    'review': review,
-                                    'keyword': keyword,
-                                    'severity_score': severity_score,
-                                    'text_snippet': text[:100] + '...' if len(text) > 100 else text
-                                })
+                                found_categories.append(f'feature_{matched_subcategory}')
                             else:
-                                other_issues_found[category_id].append({
+                                # General feature request
+                                general_keyword = next((kw for kw in category_config.keywords if kw in text), 'feature request')
+                                priority_score = (6 - rating) * category_config.priority_multiplier
+                                feature_requests_found['general_requests'].append({
                                     'review': review,
-                                    'keyword': keyword,
-                                    'severity_score': severity_score,
+                                    'keyword': general_keyword,
+                                    'priority_score': priority_score,
                                     'text_snippet': text[:100] + '...' if len(text) > 100 else text
                                 })
-                            
-                            found_categories.append(category_id)
-                            break
+                                found_categories.append('feature_general_requests')
+                    else:
+                        # Handle other categories normally
+                        keywords = category_config.keywords
+                        
+                        for keyword in keywords:
+                            if keyword in text:
+                                # Calculate a simple score based on rating (lower rating = higher severity)
+                                severity_score = (6 - rating) * category_config.priority_multiplier
+                                
+                                if category_id.startswith('ux_'):
+                                    ux_issues_found[category_id].append({
+                                        'review': review,
+                                        'keyword': keyword,
+                                        'severity_score': severity_score,
+                                        'text_snippet': text[:100] + '...' if len(text) > 100 else text
+                                    })
+                                elif category_id.startswith('critical_'):
+                                    critical_complaints_found[category_id].append({
+                                        'review': review,
+                                        'keyword': keyword,
+                                        'severity_score': severity_score,
+                                        'text_snippet': text[:150] + '...' if len(text) > 150 else text,
+                                        'alert_priority': 'CRITICAL'
+                                    })
+                                elif category_id.startswith('tech_'):
+                                    tech_issues_found[category_id].append({
+                                        'review': review,
+                                        'keyword': keyword,
+                                        'severity_score': severity_score,
+                                        'text_snippet': text[:100] + '...' if len(text) > 100 else text
+                                    })
+                                else:
+                                    other_issues_found[category_id].append({
+                                        'review': review,
+                                        'keyword': keyword,
+                                        'severity_score': severity_score,
+                                        'text_snippet': text[:100] + '...' if len(text) > 100 else text
+                                    })
+                                
+                                found_categories.append(category_id)
+                                break
                 
                 # Additional logic for general feature requests
                 feature_request_indicators = [
@@ -946,7 +982,7 @@ class ReviewAnalysisEngine:
         tech_priorities.sort(key=lambda x: x['combined_score'], reverse=True)
         insights['priority_tech_issues'] = tech_priorities[:5]
         
-        # Top Feature Requests
+        # Top Feature Requests with actual reviews and highlighted phrases
         feature_requests = classification_data.get('feature_requests', {})
         feature_priorities = []
         for feature_type, data in feature_requests.items():
@@ -955,14 +991,36 @@ class ReviewAnalysisEngine:
                 frequency_score = data.get('percentage', 0)
                 combined_score = (frequency_score * 0.6) + (priority_score * 0.4)
                 
+                # Extract actual reviews and highlighted phrases from examples
+                reviews_with_phrases = []
+                examples = data.get('examples', [])
+                for example in examples[:5]:  # Get up to 5 examples
+                    review = example.get('review', {})
+                    keyword = example.get('keyword', '')
+                    review_text = review.get('content', '') or review.get('text', '') or review.get('review', '')
+                    
+                    # Extract highlighted phrases around the keyword
+                    highlighted_phrases = self._extract_highlighted_phrases(review_text, keyword, feature_type)
+                    
+                    reviews_with_phrases.append({
+                        'review_id': review.get('review_id', ''),
+                        'author': review.get('author', 'Anonymous'),
+                        'rating': review.get('rating', 0),
+                        'date': review.get('date', ''),
+                        'full_text': review_text,
+                        'highlighted_phrases': highlighted_phrases,
+                        'matched_keyword': keyword
+                    })
+                
                 feature_priorities.append({
-                    'feature': feature_type.replace('_', ' ').title(),
-                    'count': data.get('count', 0),
+                    'feature_type': feature_type.replace('_', ' ').title(),
+                    'requests': data.get('count', 0),
                     'percentage': round(frequency_score, 1),
                     'priority_score': round(priority_score, 1),
                     'combined_score': round(combined_score, 1),
                     'priority_level': data.get('priority_level', 'Medium'),
-                    'category': 'Feature Requests'
+                    'category': 'Feature Requests',
+                    'actual_reviews': reviews_with_phrases
                 })
         
         feature_priorities.sort(key=lambda x: x['combined_score'], reverse=True)
@@ -1267,7 +1325,7 @@ class ReviewAnalysisEngine:
         # Identify top opportunity
         if insights.get('top_feature_requests'):
             top_feature = insights['top_feature_requests'][0]
-            summary['top_opportunity'] = f"{top_feature['feature']} ({top_feature['count']} requests)"
+            summary['top_opportunity'] = f"{top_feature['feature_type']} ({top_feature['requests']} requests)"
         
         return summary
 
@@ -1408,6 +1466,42 @@ class ReviewAnalysisEngine:
         critical_themes.sort(key=lambda x: (severity_order.get(x['severity'], 4), -x['review_count']))
         
         return critical_themes[:6]  # Return top 6 critical themes
+
+    def _extract_highlighted_phrases(self, text: str, matched_keyword: str, feature_type: str) -> List[str]:
+        """Extract highlighted phrases around keywords for feature requests"""
+        phrases = []
+        text_lower = text.lower()
+        
+        # Get feature-specific keywords
+        feature_keywords = []
+        if feature_type in self.categories.get('feature_requests', {}).subcategories:
+            feature_keywords = self.categories['feature_requests'].subcategories[feature_type]
+        
+        # Add general feature request keywords
+        general_keywords = ['need', 'want', 'add', 'feature', 'would like', 'should have', 'missing', 'wish', 'hope']
+        all_keywords = feature_keywords + general_keywords + [matched_keyword]
+        
+        # Find phrases containing keywords
+        sentences = text.split('.')
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if any(keyword.lower() in sentence.lower() for keyword in all_keywords):
+                # Clean up the sentence
+                clean_sentence = sentence.strip(' ,!?.-')
+                if len(clean_sentence) > 10:  # Only include meaningful phrases
+                    phrases.append(clean_sentence)
+        
+        # If no sentences found, try to extract phrases around keywords
+        if not phrases:
+            for keyword in all_keywords:
+                if keyword.lower() in text_lower:
+                    start = max(0, text_lower.find(keyword.lower()) - 50)
+                    end = min(len(text), text_lower.find(keyword.lower()) + len(keyword) + 50)
+                    phrase = text[start:end].strip()
+                    if phrase:
+                        phrases.append(phrase)
+        
+        return phrases[:3]  # Return top 3 phrases
 
     def comprehensive_analysis(self, reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -1668,5 +1762,659 @@ class ReviewAnalysisEngine:
         except Exception as e:
             logger.error(f"Review segmentation failed: {e}")
             return {'error': f'Review segmentation failed: {str(e)}'}
+
+    def advanced_analysis(self, reviews: List[Dict]) -> Dict[str, Any]:
+        """
+        Advanced AI analysis with deeper business intelligence
+        
+        This provides:
+        - Business impact signals (revenue risk, churn indicators)
+        - Emotional intensity analysis beyond sentiment
+        - Competitive intelligence extraction
+        - Actionable pain points with user solutions
+        - Smart feature prioritization with urgency
+        - Advanced aspect-based sentiment analysis
+        """
+        try:
+            logger.info("Starting advanced AI analysis...")
+            
+            if not reviews:
+                return {'error': 'No reviews provided for advanced analysis'}
+            
+            # Initialize results structure
+            advanced_results = {
+                'meta': {
+                    'analysis_type': 'advanced_ai',
+                    'total_reviews': len(reviews),
+                    'timestamp': datetime.now().isoformat(),
+                    'model_version': '2.0-advanced'
+                },
+                'business_intelligence': {},
+                'emotional_analysis': {},
+                'competitive_insights': {},
+                'actionable_feedback': {},
+                'advanced_sentiment': {},
+                'recommendations': []
+            }
+            
+            # Extract text from all reviews
+            review_texts = []
+            for review in reviews:
+                text = review.get('content', '') or review.get('text', '') or review.get('review', '')
+                if text and isinstance(text, str):
+                    review_texts.append({
+                        'text': text,
+                        'rating': int(review.get('rating', 0)) if isinstance(review.get('rating'), (int, str)) else 0,
+                        'date': review.get('date', ''),
+                        'review_id': review.get('review_id', f"review_{len(review_texts)}")
+                    })
+            
+            # 1. Business Impact Analysis
+            advanced_results['business_intelligence'] = self._analyze_business_impact(review_texts)
+            
+            # 2. Emotional Intensity Analysis
+            advanced_results['emotional_analysis'] = self._analyze_emotional_intensity(review_texts)
+            
+            # 3. Competitive Intelligence
+            advanced_results['competitive_insights'] = self._extract_competitive_intelligence(review_texts)
+            
+            # 4. Actionable Feedback Analysis
+            advanced_results['actionable_feedback'] = self._analyze_actionable_feedback(review_texts)
+            
+            # 5. Advanced Aspect-Based Sentiment
+            advanced_results['advanced_sentiment'] = self._advanced_aspect_sentiment(review_texts)
+            
+            # 6. Generate Advanced Recommendations
+            advanced_results['recommendations'] = self._generate_advanced_recommendations(advanced_results)
+            
+            logger.info("Advanced AI analysis completed successfully")
+            return advanced_results
+            
+        except Exception as e:
+            logger.error(f"Advanced analysis failed: {e}")
+            return {'error': f'Advanced analysis failed: {str(e)}'}
+    
+    def _analyze_business_impact(self, reviews: List[Dict]) -> Dict[str, Any]:
+        """Analyze business-critical signals"""
+        impact_signals = {
+            'revenue_risk': {'high': 0, 'medium': 0, 'low': 0, 'signals': []},
+            'churn_indicators': {'count': 0, 'percentage': 0, 'phrases': []},
+            'advocacy_signals': {'count': 0, 'percentage': 0, 'phrases': []},
+            'urgency_distribution': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+        }
+        
+        # Revenue risk patterns
+        revenue_risk_patterns = {
+            'high': [r'(cancel|uninstall|delete|refund|money back|subscription.*cancel)',
+                    r'(switching to|using.*instead|found better|competitor)'],
+            'medium': [r'(disappointed|waste.*money|not worth|regret|mistake)',
+                      r'(considering.*cancel|thinking.*leaving|might.*switch)'],
+            'low': [r'(price.*high|expensive|cost.*much|subscription.*expensive)']
+        }
+        
+        # Churn indicators
+        churn_patterns = [r'(leaving|quit|done with|final.*time|last.*chance)',
+                         r'(uninstalling|deleted|removed|bye|goodbye)',
+                         r'(never.*again|worst.*ever|completely.*useless)']
+        
+        # Advocacy patterns
+        advocacy_patterns = [r'(recommend|tell.*friends|share.*with|suggest.*to)',
+                           r'(love.*app|best.*app|amazing|incredible|perfect)',
+                           r'(must.*have|essential|can\'t.*live.*without)']
+        
+        for review in reviews:
+            text = review['text'].lower()
+            
+            # Check revenue risk
+            for risk_level, patterns in revenue_risk_patterns.items():
+                for pattern in patterns:
+                    if re.search(pattern, text):
+                        impact_signals['revenue_risk'][risk_level] += 1
+                        impact_signals['revenue_risk']['signals'].append({
+                            'level': risk_level,
+                            'review_id': review['review_id'],
+                            'phrase': re.search(pattern, text).group(0) if re.search(pattern, text) else '',
+                            'rating': review['rating']
+                        })
+            
+            # Check churn indicators
+            for pattern in churn_patterns:
+                if re.search(pattern, text):
+                    impact_signals['churn_indicators']['count'] += 1
+                    impact_signals['churn_indicators']['phrases'].append(re.search(pattern, text).group(0))
+            
+            # Check advocacy signals
+            for pattern in advocacy_patterns:
+                if re.search(pattern, text):
+                    impact_signals['advocacy_signals']['count'] += 1
+                    impact_signals['advocacy_signals']['phrases'].append(re.search(pattern, text).group(0))
+        
+        # Calculate percentages
+        total_reviews = len(reviews)
+        impact_signals['churn_indicators']['percentage'] = round(
+            (impact_signals['churn_indicators']['count'] / total_reviews) * 100, 1
+        )
+        impact_signals['advocacy_signals']['percentage'] = round(
+            (impact_signals['advocacy_signals']['count'] / total_reviews) * 100, 1
+        )
+        
+        return impact_signals
+    
+    def _analyze_emotional_intensity(self, reviews: List[Dict]) -> Dict[str, Any]:
+        """Analyze emotional intensity beyond basic sentiment"""
+        emotions = {
+            'frustration': {'count': 0, 'phrases': [], 'reviews': []},
+            'excitement': {'count': 0, 'phrases': [], 'reviews': []},
+            'disappointment': {'count': 0, 'phrases': [], 'reviews': []},
+            'satisfaction': {'count': 0, 'phrases': [], 'reviews': []},
+            'anger': {'count': 0, 'phrases': [], 'reviews': []},
+            'delight': {'count': 0, 'phrases': [], 'reviews': []}
+        }
+        
+        emotion_patterns = {
+            'frustration': [r'(frustrated|annoying|irritating|infuriating|fed up)',
+                          r'(waste.*time|sick of|can\'t stand|driving.*crazy)'],
+            'excitement': [r'(excited|thrilled|amazed|blown away|incredible)',
+                         r'(game changer|revolutionary|mind blowing|outstanding)'],
+            'disappointment': [r'(disappointed|let down|expected more|underwhelming)',
+                             r'(not what.*hoped|thought.*better|hoped for more)'],
+            'satisfaction': [r'(satisfied|pleased|happy|content|fulfilled)',
+                           r'(exactly what|perfect|just right|exceeded.*expectations)'],
+            'anger': [r'(angry|furious|mad|outraged|livid)',
+                     r'(hate|despise|terrible|awful|worst ever)'],
+            'delight': [r'(delighted|overjoyed|ecstatic|love love|adore)',
+                       r'(fantastic|wonderful|brilliant|superb|excellent)']
+        }
+        
+        for review in reviews:
+            text = review['text'].lower()
+            
+            for emotion, patterns in emotion_patterns.items():
+                for pattern in patterns:
+                    matches = re.findall(pattern, text)
+                    if matches:
+                        emotions[emotion]['count'] += len(matches)
+                        emotions[emotion]['phrases'].extend(matches)
+                        emotions[emotion]['reviews'].append({
+                            'review_id': review['review_id'],
+                            'rating': review['rating'],
+                            'snippet': text[:100] + '...' if len(text) > 100 else text
+                        })
+        
+        return emotions
+    
+    def _extract_competitive_intelligence(self, reviews: List[Dict]) -> Dict[str, Any]:
+        """Extract competitive mentions and comparisons"""
+        competitors = {
+            'social_media': ['instagram', 'facebook', 'twitter', 'tiktok', 'snapchat'],
+            'messaging': ['whatsapp', 'telegram', 'signal', 'discord'],
+            'productivity': ['notion', 'slack', 'teams', 'zoom', 'asana'],
+            'entertainment': ['netflix', 'spotify', 'youtube', 'twitch']
+        }
+        
+        competitive_data = {}
+        
+        for category, apps in competitors.items():
+            competitive_data[category] = {}
+            
+            for app in apps:
+                mentions = []
+                for review in reviews:
+                    text = review['text'].lower()
+                    
+                    # Look for competitive mentions with context
+                    patterns = [
+                        f"(better than {app}|{app} is better|compared to {app})",
+                        f"(like {app}|similar to {app}|reminds me of {app})",
+                        f"(switch to {app}|moving to {app}|prefer {app})"
+                    ]
+                    
+                    for pattern in patterns:
+                        if re.search(pattern, text):
+                            mentions.append({
+                                'review_id': review['review_id'],
+                                'context': re.search(pattern, text).group(0),
+                                'rating': review['rating'],
+                                'comparison_type': self._classify_comparison(pattern, text)
+                            })
+                
+                if mentions:
+                    competitive_data[category][app] = {
+                        'mention_count': len(mentions),
+                        'mentions': mentions[:5]  # Top 5 mentions
+                    }
+        
+        return competitive_data
+    
+    def _classify_comparison(self, pattern: str, text: str) -> str:
+        """Classify the type of competitive comparison"""
+        if any(word in text for word in ['better', 'superior', 'prefer']):
+            return 'competitor_advantage'
+        elif any(word in text for word in ['worse', 'not as good', 'inferior']):
+            return 'our_advantage'
+        elif any(word in text for word in ['like', 'similar', 'reminds']):
+            return 'feature_comparison'
+        elif any(word in text for word in ['switch', 'moving', 'leaving']):
+            return 'churn_signal'
+        else:
+            return 'general_mention'
+    
+    def _analyze_actionable_feedback(self, reviews: List[Dict]) -> Dict[str, Any]:
+        """Extract actionable feedback with user-suggested solutions"""
+        actionable_items = {
+            'pain_points_with_solutions': [],
+            'feature_gaps': [],
+            'urgent_fixes': [],
+            'quick_wins': []
+        }
+        
+        # Pattern for pain point + solution statements
+        solution_patterns = [
+            r'(.+?)(problem|issue|trouble).+?(should|need|want|fix|add|implement)(.+?)(?:[.!?]|$)',
+            r'(.+?)(doesn\'t work|broken|fails).+?(if.*could|would be better|suggest)(.+?)(?:[.!?]|$)',
+            r'(wish|hope|if only).+?(had|could|would)(.+?)(?:[.!?]|$)'
+        ]
+        
+        for review in reviews:
+            text = review['text']
+            
+            for pattern in solution_patterns:
+                matches = re.finditer(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    actionable_items['pain_points_with_solutions'].append({
+                        'review_id': review['review_id'],
+                        'pain_point': match.group(1).strip() if len(match.groups()) > 0 else '',
+                        'suggested_solution': match.group(-1).strip(),
+                        'urgency': self._assess_urgency(text),
+                        'rating': review['rating'],
+                        'full_context': match.group(0)
+                    })
+        
+        return actionable_items
+    
+    def _assess_urgency(self, text: str) -> str:
+        """Assess the urgency level of feedback"""
+        text_lower = text.lower()
+        
+        if any(word in text_lower for word in ['urgent', 'immediate', 'asap', 'critical', 'emergency']):
+            return 'critical'
+        elif any(word in text_lower for word in ['important', 'serious', 'soon', 'really need']):
+            return 'high'
+        elif any(word in text_lower for word in ['would like', 'hope', 'suggestion', 'nice to have']):
+            return 'medium'
+        else:
+            return 'low'
+    
+    def _advanced_aspect_sentiment(self, reviews: List[Dict]) -> Dict[str, Any]:
+        """Advanced aspect-based sentiment analysis"""
+        aspects = {
+            'user_interface': {'positive': 0, 'negative': 0, 'neutral': 0, 'mentions': []},
+            'performance': {'positive': 0, 'negative': 0, 'neutral': 0, 'mentions': []},
+            'features': {'positive': 0, 'negative': 0, 'neutral': 0, 'mentions': []},
+            'customer_support': {'positive': 0, 'negative': 0, 'neutral': 0, 'mentions': []},
+            'pricing': {'positive': 0, 'negative': 0, 'neutral': 0, 'mentions': []},
+            'reliability': {'positive': 0, 'negative': 0, 'neutral': 0, 'mentions': []}
+        }
+        
+        aspect_keywords = {
+            'user_interface': ['ui', 'interface', 'design', 'layout', 'look', 'appearance'],
+            'performance': ['speed', 'fast', 'slow', 'lag', 'performance', 'responsive'],
+            'features': ['feature', 'function', 'capability', 'tool', 'option'],
+            'customer_support': ['support', 'help', 'customer service', 'assistance'],
+            'pricing': ['price', 'cost', 'expensive', 'cheap', 'subscription', 'premium'],
+            'reliability': ['reliable', 'stable', 'crash', 'bug', 'error', 'work']
+        }
+        
+        for review in reviews:
+            text = review['text'].lower()
+            
+            for aspect, keywords in aspect_keywords.items():
+                for keyword in keywords:
+                    if keyword in text:
+                        # Simple sentiment based on rating
+                        if review['rating'] >= 4:
+                            sentiment = 'positive'
+                        elif review['rating'] <= 2:
+                            sentiment = 'negative'
+                        else:
+                            sentiment = 'neutral'
+                        
+                        aspects[aspect][sentiment] += 1
+                        aspects[aspect]['mentions'].append({
+                            'review_id': review['review_id'],
+                            'keyword': keyword,
+                            'sentiment': sentiment,
+                            'rating': review['rating']
+                        })
+        
+        return aspects
+    
+    def _generate_advanced_recommendations(self, analysis_data: Dict) -> List[Dict]:
+        """Generate advanced recommendations based on analysis"""
+        recommendations = []
+        
+        # Business impact recommendations
+        business_intel = analysis_data.get('business_intelligence', {})
+        churn_rate = business_intel.get('churn_indicators', {}).get('percentage', 0)
+        
+        if churn_rate > 10:
+            recommendations.append({
+                'category': 'Critical Business Risk',
+                'priority': 'HIGH',
+                'action': f'Address churn indicators immediately - {churn_rate}% of users showing leaving signals',
+                'impact': 'Revenue Protection',
+                'timeline': 'Within 1 week'
+            })
+        
+        # Emotional analysis recommendations
+        emotions = analysis_data.get('emotional_analysis', {})
+        frustration_count = emotions.get('frustration', {}).get('count', 0)
+        
+        if frustration_count > len(analysis_data.get('meta', {}).get('total_reviews', 100)) * 0.15:
+            recommendations.append({
+                'category': 'User Experience',
+                'priority': 'HIGH',
+                'action': 'Investigate and address sources of user frustration',
+                'impact': 'User Satisfaction',
+                'timeline': 'Within 2 weeks'
+            })
+        
+        # Competitive recommendations
+        competitive_data = analysis_data.get('competitive_insights', {})
+        for category, competitors in competitive_data.items():
+            for competitor, data in competitors.items():
+                if data.get('mention_count', 0) > 3:
+                    recommendations.append({
+                        'category': 'Competitive Analysis',
+                        'priority': 'MEDIUM',
+                        'action': f'Analyze {competitor} features - users making comparisons',
+                        'impact': 'Market Position',
+                        'timeline': 'Within 1 month'
+                    })
+        
+        return recommendations
+
+    def separate_sentiment_analysis(self, reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Separate reviews into positive and negative sentiments with detailed review extraction
+        
+        Args:
+            reviews: List of review dictionaries with 'review'/'content' and 'rating' keys
+            
+        Returns:
+            Dictionary containing separated positive and negative themes with actual reviews
+        """
+        try:
+            positive_themes = defaultdict(list)
+            negative_themes = defaultdict(list)
+            
+            # Define positive and negative theme categories
+            positive_categories = {
+                'design_praise': {
+                    'name': 'Design & Interface Praise',
+                    'keywords': ['beautiful', 'gorgeous', 'stunning', 'elegant', 'clean design', 'nice interface', 
+                               'great ui', 'looks good', 'visually appealing', 'attractive', 'polished', 'sleek'],
+                    'priority_multiplier': 1.0
+                },
+                'functionality_praise': {
+                    'name': 'Functionality Appreciation',
+                    'keywords': ['works perfectly', 'functions well', 'reliable', 'stable', 'smooth', 'efficient',
+                               'fast', 'quick', 'responsive', 'seamless', 'flawless', 'consistent'],
+                    'priority_multiplier': 1.2
+                },
+                'feature_love': {
+                    'name': 'Feature Appreciation',
+                    'keywords': ['love this feature', 'amazing feature', 'great feature', 'useful feature', 
+                               'helpful feature', 'convenient', 'powerful', 'innovative', 'brilliant'],
+                    'priority_multiplier': 1.1
+                },
+                'ease_of_use': {
+                    'name': 'Ease of Use',
+                    'keywords': ['easy to use', 'simple', 'intuitive', 'user friendly', 'straightforward', 
+                               'clear', 'logical', 'makes sense', 'no confusion', 'obvious'],
+                    'priority_multiplier': 1.0
+                },
+                'performance_praise': {
+                    'name': 'Performance Excellence',
+                    'keywords': ['fast loading', 'quick response', 'no lag', 'smooth performance', 'optimized',
+                               'lightning fast', 'instant', 'speedy', 'no delays', 'snappy'],
+                    'priority_multiplier': 1.3
+                },
+                'overall_satisfaction': {
+                    'name': 'Overall Satisfaction',
+                    'keywords': ['love it', 'perfect', 'excellent', 'outstanding', 'amazing', 'fantastic',
+                               'wonderful', 'great app', 'best app', 'highly recommend', 'satisfied', 'happy'],
+                    'priority_multiplier': 1.0
+                }
+            }
+            
+            negative_categories = {
+                'usability_issues': {
+                    'name': 'Usability Problems',
+                    'keywords': ['confusing', 'complicated', 'hard to use', 'difficult', 'not intuitive', 
+                               'unclear', 'messy interface', 'poor design', 'bad ui', 'hard to navigate'],
+                    'severity_multiplier': 1.2
+                },
+                'performance_issues': {
+                    'name': 'Performance Problems',
+                    'keywords': ['slow', 'laggy', 'crashes', 'freezes', 'hangs', 'unresponsive', 'buggy',
+                               'glitchy', 'not working', 'broken', 'unstable', 'poor performance'],
+                    'severity_multiplier': 1.5
+                },
+                'feature_complaints': {
+                    'name': 'Feature Complaints',
+                    'keywords': ['missing feature', 'lacks', 'doesnt have', 'no option', 'limited', 'restricted',
+                               'basic', 'primitive', 'outdated', 'behind competition', 'feature poor'],
+                    'severity_multiplier': 1.1
+                },
+                'functionality_issues': {
+                    'name': 'Functionality Problems',
+                    'keywords': ['not working', 'broken', 'fails', 'error', 'bug', 'issue', 'problem',
+                               'malfunction', 'doesnt work', 'stopped working', 'unreliable'],
+                    'severity_multiplier': 1.4
+                },
+                'design_complaints': {
+                    'name': 'Design & Interface Issues',
+                    'keywords': ['ugly', 'bad design', 'poor layout', 'messy', 'cluttered', 'outdated design',
+                               'horrible interface', 'looks bad', 'unattractive', 'unprofessional'],
+                    'severity_multiplier': 1.0
+                },
+                'overall_dissatisfaction': {
+                    'name': 'Overall Dissatisfaction',
+                    'keywords': ['hate it', 'terrible', 'awful', 'worst', 'horrible', 'disgusting',
+                               'disappointed', 'regret', 'waste', 'uninstalling', 'never again'],
+                    'severity_multiplier': 1.3
+                }
+            }
+            
+            total_reviews = len(reviews)
+            classified_reviews = []
+            
+            for review in reviews:
+                text = review.get('review', review.get('content', '')).lower()
+                rating = review.get('rating', 3)
+                
+                if not text:
+                    continue
+                
+                found_categories = []
+                
+                # Check for positive themes (typically ratings 4-5)
+                if rating >= 4:
+                    for category_id, category_config in positive_categories.items():
+                        for keyword in category_config['keywords']:
+                            if keyword in text:
+                                # Extract highlighted phrases
+                                highlighted_phrases = self._extract_highlighted_phrases(text, keyword, category_id)
+                                
+                                positive_score = rating * category_config['priority_multiplier']
+                                positive_themes[category_id].append({
+                                    'review': review,
+                                    'keyword': keyword,
+                                    'positive_score': positive_score,
+                                    'text_snippet': text[:150] + '...' if len(text) > 150 else text,
+                                    'highlighted_phrases': highlighted_phrases,
+                                    'category_name': category_config['name']
+                                })
+                                found_categories.append(f'positive_{category_id}')
+                                break
+                
+                # Check for negative themes (typically ratings 1-3)
+                if rating <= 3:
+                    for category_id, category_config in negative_categories.items():
+                        for keyword in category_config['keywords']:
+                            if keyword in text:
+                                # Extract highlighted phrases
+                                highlighted_phrases = self._extract_highlighted_phrases(text, keyword, category_id)
+                                
+                                severity_score = (4 - rating) * category_config['severity_multiplier']
+                                negative_themes[category_id].append({
+                                    'review': review,
+                                    'keyword': keyword,
+                                    'severity_score': severity_score,
+                                    'text_snippet': text[:150] + '...' if len(text) > 150 else text,
+                                    'highlighted_phrases': highlighted_phrases,
+                                    'category_name': category_config['name']
+                                })
+                                found_categories.append(f'negative_{category_id}')
+                                break
+                
+                classified_reviews.append({
+                    'review': review,
+                    'categories': found_categories,
+                    'sentiment': 'positive' if rating >= 4 else 'negative' if rating <= 2 else 'neutral'
+                })
+            
+            # Calculate summaries for positive themes
+            def calculate_positive_summary(themes_dict, category_name):
+                if not themes_dict:
+                    return []
+                
+                results = []
+                for theme_id, theme_reviews in themes_dict.items():
+                    if not theme_reviews:
+                        continue
+                    
+                    # Sort by positive score
+                    sorted_reviews = sorted(theme_reviews, key=lambda x: x['positive_score'], reverse=True)
+                    
+                    # Get actual reviews with enhanced metadata
+                    actual_reviews = []
+                    for item in sorted_reviews[:15]:  # Top 15 examples
+                        review_data = item['review']
+                        actual_reviews.append({
+                            'review_id': f"review_{len(actual_reviews)}",
+                            'author': 'Anonymous',  # Anonymized
+                            'rating': review_data.get('rating', 0),
+                            'date': review_data.get('date', ''),
+                            'full_text': review_data.get('review', review_data.get('content', '')),
+                            'highlighted_phrases': item['highlighted_phrases'],
+                            'matched_keyword': item['keyword']
+                        })
+                    
+                    avg_score = sum(item['positive_score'] for item in theme_reviews) / len(theme_reviews)
+                    avg_rating = sum(item['review'].get('rating', 0) for item in theme_reviews) / len(theme_reviews)
+                    
+                    category_config = positive_categories.get(theme_id, {})
+                    
+                    results.append({
+                        'theme_type': category_config.get('name', theme_id.replace('_', ' ').title()),
+                        'praise_count': len(theme_reviews),
+                        'percentage': round((len(theme_reviews) / total_reviews) * 100, 1),
+                        'satisfaction_level': self._get_satisfaction_level(avg_score),
+                        'combined_score': round(avg_score, 2),
+                        'average_rating': round(avg_rating, 1),
+                        'actual_reviews': actual_reviews
+                    })
+                
+                return sorted(results, key=lambda x: x['combined_score'], reverse=True)
+            
+            # Calculate summaries for negative themes
+            def calculate_negative_summary(themes_dict, category_name):
+                if not themes_dict:
+                    return []
+                
+                results = []
+                for theme_id, theme_reviews in themes_dict.items():
+                    if not theme_reviews:
+                        continue
+                    
+                    # Sort by severity score
+                    sorted_reviews = sorted(theme_reviews, key=lambda x: x['severity_score'], reverse=True)
+                    
+                    # Get actual reviews with enhanced metadata
+                    actual_reviews = []
+                    for item in sorted_reviews[:15]:  # Top 15 examples
+                        review_data = item['review']
+                        actual_reviews.append({
+                            'review_id': f"review_{len(actual_reviews)}",
+                            'author': 'Anonymous',  # Anonymized
+                            'rating': review_data.get('rating', 0),
+                            'date': review_data.get('date', ''),
+                            'full_text': review_data.get('review', review_data.get('content', '')),
+                            'highlighted_phrases': item['highlighted_phrases'],
+                            'matched_keyword': item['keyword']
+                        })
+                    
+                    avg_score = sum(item['severity_score'] for item in theme_reviews) / len(theme_reviews)
+                    avg_rating = sum(item['review'].get('rating', 0) for item in theme_reviews) / len(theme_reviews)
+                    
+                    category_config = negative_categories.get(theme_id, {})
+                    
+                    results.append({
+                        'issue_type': category_config.get('name', theme_id.replace('_', ' ').title()),
+                        'complaint_count': len(theme_reviews),
+                        'percentage': round((len(theme_reviews) / total_reviews) * 100, 1),
+                        'severity_level': self._get_severity_level(avg_score),
+                        'combined_score': round(avg_score, 2),
+                        'average_rating': round(avg_rating, 1),
+                        'actual_reviews': actual_reviews
+                    })
+                
+                return sorted(results, key=lambda x: x['combined_score'], reverse=True)
+            
+            # Generate results
+            positive_summary = calculate_positive_summary(positive_themes, 'Positive Themes')
+            negative_summary = calculate_negative_summary(negative_themes, 'Negative Themes')
+            
+            # Calculate overall sentiment distribution
+            sentiment_counts = {'positive': 0, 'negative': 0, 'neutral': 0}
+            for review in classified_reviews:
+                sentiment_counts[review['sentiment']] += 1
+            
+            return {
+                'positive_themes': positive_summary,
+                'negative_themes': negative_summary,
+                'sentiment_distribution': sentiment_counts,
+                'classification_meta': {
+                    'total_reviews_analyzed': total_reviews,
+                    'positive_reviews': sentiment_counts['positive'],
+                    'negative_reviews': sentiment_counts['negative'],
+                    'neutral_reviews': sentiment_counts['neutral'],
+                    'positive_percentage': round((sentiment_counts['positive'] / total_reviews) * 100, 1),
+                    'negative_percentage': round((sentiment_counts['negative'] / total_reviews) * 100, 1),
+                    'analysis_timestamp': datetime.now().isoformat()
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Sentiment separation analysis failed: {e}")
+            return {
+                'positive_themes': [],
+                'negative_themes': [],
+                'sentiment_distribution': {'positive': 0, 'negative': 0, 'neutral': 0},
+                'error': f'Sentiment analysis failed: {str(e)}'
+            }
+    
+    def _get_satisfaction_level(self, score: float) -> str:
+        """Get satisfaction level from positive score"""
+        if score >= 4.5:
+            return "Very High"
+        elif score >= 3.5:
+            return "High"
+        elif score >= 2.5:
+            return "Medium"
+        else:
+            return "Low"
 
 # No global instance - will be created in main.py 
