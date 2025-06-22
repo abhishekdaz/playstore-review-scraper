@@ -341,9 +341,6 @@ def get_app_metadata(app_id: str) -> Dict[str, Any]:
         Dictionary containing app metadata or empty dict if failed
     """
     try:
-        if not SCRAPER_AVAILABLE:
-            return {}
-            
         app_info = app(app_id, lang="en", country="us")
         
         # Extract relevant metadata

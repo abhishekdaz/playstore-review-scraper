@@ -275,6 +275,42 @@ export default function Home() {
     }
   };
 
+  const getHealthDescription = (health: string, analysisResults: AnalysisResults | null): string => {
+    if (!analysisResults) return "Analysis not available";
+    
+    const avgRating = analysisResults.statistics.avg_rating;
+    const urgencyScore = analysisResults.insights.urgency_score;
+    const criticalIssues = analysisResults.insights.priority_issues?.filter(issue => 
+      issue.severity_level === 'Critical' || issue.severity_level === 'High'
+    ).length || 0;
+    const overallSentiment = analysisResults.insights.sentiment_trends.overall_sentiment;
+    
+    switch (health.toLowerCase()) {
+      case 'poor':
+        const reasons = [];
+        if (avgRating < 3.0) reasons.push(`low average rating (${avgRating.toFixed(1)}★)`);
+        if (urgencyScore > 70) reasons.push(`high urgency score (${urgencyScore}/100)`);
+        if (criticalIssues > 3) reasons.push(`${criticalIssues} critical issues identified`);
+        if (overallSentiment === 'Negative') reasons.push('predominantly negative sentiment');
+        
+        return reasons.length > 0 
+          ? `Due to ${reasons.slice(0, 2).join(' and ')}${reasons.length > 2 ? ' among other issues' : ''}`
+          : 'Multiple critical issues requiring immediate attention';
+          
+      case 'fair':
+        return `Moderate concerns with ${avgRating.toFixed(1)}★ rating and ${criticalIssues} priority issues to address`;
+        
+      case 'good':
+        return `Generally positive with ${avgRating.toFixed(1)}★ rating and manageable improvement areas`;
+        
+      case 'excellent':
+        return `Outstanding performance with ${avgRating.toFixed(1)}★ rating and minimal critical issues`;
+        
+      default:
+        return 'Health assessment unavailable';
+    }
+  };
+
   // Removed unused app type configuration functions
 
   // ===== API FUNCTIONS =====
@@ -1260,6 +1296,9 @@ export default function Home() {
                           {analysisResults.insights.summary?.overall_health || 'Unknown'}
                         </div>
                         <div className="text-sm text-gray-400">App Health</div>
+                        <div className="text-xs text-gray-500 mt-2 max-w-[200px] mx-auto">
+                          {getHealthDescription(analysisResults.insights.summary?.overall_health || 'Unknown', analysisResults)}
+                        </div>
                       </div>
                       <div className="text-center">
                         <div className="text-3xl font-bold text-purple-400">
