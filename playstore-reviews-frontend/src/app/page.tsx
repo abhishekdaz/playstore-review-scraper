@@ -33,6 +33,9 @@ interface Review {
   rating: number;
   review: string;
   date: string;
+  thumbsUpCount?: number;
+  userName?: string;
+  reviewId?: string;
   sentiment_analysis?: {
     final_sentiment: string;
     confidence: number;
@@ -42,6 +45,11 @@ interface Review {
   issues?: string[];
   features?: string[];
   classification?: string;
+}
+
+interface HelpfulReviews {
+  positive: Review[];
+  negative: Review[];
 }
 
 interface SearchResult {
@@ -109,7 +117,112 @@ interface AnalysisInsights {
     percentage: number;
     severity: string;
     problematic_phrases: string[];
+    frequent_complaints?: Array<{
+      phrase: string;
+      frequency: number;
+      avg_severity: number;
+    }>;
+    scoring_formula?: string;
   }>;
+  tech_issues_summary?: {
+    total_count: number;
+    total_percentage: number;
+    theme_count: number;
+  };
+  complaint_clusters?: {
+    total_negative_reviews: number;
+    cluster_summary: Array<{
+      'Cluster ID': number;
+      'Review Count': number;
+      'Percent of Total': number;
+      'Avg Severity': number;
+      'Avg Helpful Votes': number;
+      'Criticality Score': number;
+      'Top Complaint Phrases': Array<{
+        phrase: string;
+        frequency: number;
+        avg_severity: number;
+      }>;
+      'Representative Reviews': Array<{
+        text: string;
+        thumbsUpCount: number;
+      }>;
+    }>;
+    ui_simplification_notes?: string[];
+    message?: string;
+    error?: string;
+  };
+  negative_cluster_analysis?: {
+    total_negative_reviews: number;
+    total_clustered_reviews: number;
+    coverage_percentage: number;
+    coverage_sentence: string;
+    cluster_summary: Array<{
+      'Cluster ID': number;
+      'Cluster Label': string;
+      'Review Count': number;
+      'Percent of Clustered Reviews': number;
+      'Avg Severity': number;
+      'Avg Helpful Votes': number;
+      'Total Helpful Votes': number;
+      'Criticality Score': number;
+      'Concern Level': string;
+      'Top Complaint Phrases': Array<{
+        phrase: string;
+        frequency: number;
+        avg_severity: number;
+      }>;
+      'Most Helpful Complaint': {
+        text: string;
+        thumbsUpCount: number;
+        date: string;
+      };
+      'Representative Reviews': Array<{
+        text: string;
+        thumbsUpCount: number;
+      }>;
+    }>;
+  };
+  critical_user_complaints?: {
+    total_negative_reviews: number;
+    critical_issues: Array<{
+      rank: number;
+      theme: string;
+      complaint_count: number;
+      criticality_score: number;
+      percentage_of_negative: number;
+      criticality_label: string;
+      criticality_tag: string;
+      avg_severity: number;
+      total_helpful_votes: number;
+      most_helpful_review: {
+        text: string;
+        thumbsUpCount: number;
+        date: string;
+        rating: number;
+      };
+      representative_complaints: Array<{
+        text: string;
+        rating: number;
+        thumbsUpCount: number;
+        date: string;
+        highlights: string[];
+      }>;
+      top_problem_phrases: Array<{
+        phrase: string;
+        frequency: number;
+      }>;
+    }>;
+    summary_table: Array<{
+      theme: string;
+      percentage_of_reviews: number;
+      complaint_count: number;
+      criticality_score: number;
+      label: string;
+    }>;
+    analysis_method: string;
+    clustering_method: string;
+  };
   urgency_score: number;
   summary: {
     total_reviews_analyzed: number;
@@ -195,11 +308,11 @@ interface SentimentSeparationResults {
 
 // ===== CONSTANTS =====
 const REVIEW_COUNT_OPTIONS = [
-  { value: 100, label: "100 reviews" },
-  { value: 500, label: "500 reviews" },
-  { value: 1000, label: "1,000 reviews" },
+  { value: 400, label: "400 reviews" },
   { value: 2000, label: "2,000 reviews" },
-  { value: 5000, label: "5,000 reviews" }
+  { value: 4000, label: "4,000 reviews" },
+  { value: 8000, label: "8,000 reviews" },
+  { value: 20000, label: "20,000 reviews" }
 ];
 
 const STAR_RATINGS = [1, 2, 3, 4, 5];
@@ -208,30 +321,30 @@ const STAR_RATINGS = [1, 2, 3, 4, 5];
 
 export default function Home() {
   // ===== STATE =====
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [selectedApp, setSelectedApp] = useState<SearchResult | null>(null);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [analysisResults, setAnalysisResults] = useState<AnalysisResults | null>(null);
+  const [sentimentResults, setSentimentResults] = useState<SentimentSeparationResults | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [activeTab, setActiveTab] = useState<'search' | 'analysis'>('search');
   const [activeAnalysisTab, setActiveAnalysisTab] = useState<'overview' | 'positive' | 'negative' | 'features'>('overview');
+  const [showCriticalityModal, setShowCriticalityModal] = useState(false);
+  const [showCriticalityExplanationModal, setShowCriticalityExplanationModal] = useState(false);
   const [url, setUrl] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
   const [reviewCount, setReviewCount] = useState(100);
   const [selectedStars, setSelectedStars] = useState<number[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState("");
   
   // Results state
-  const [reviews, setReviews] = useState<Review[]>([]);
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [analysisResults, setAnalysisResults] = useState<AnalysisResults | null>(null);
-  const [sentimentResults, setSentimentResults] = useState<SentimentSeparationResults | null>(null);
   const [totalReviews, setTotalReviews] = useState(0);
   const [totalFetched, setTotalFetched] = useState(0);
   const [ratingDistribution, setRatingDistribution] = useState<Record<string, number>>({});
   const [appMetadata, setAppMetadata] = useState<any>(null);
   const [appId, setAppId] = useState("");
-
-  // App info state  
-  const [selectedApp, setSelectedApp] = useState<SearchResult | null>(null);
+  const [topHelpfulReviews, setTopHelpfulReviews] = useState<HelpfulReviews | null>(null);
 
   // ===== HELPER FUNCTIONS =====
   const toggleStarFilter = useCallback((star: number) => {
@@ -317,7 +430,7 @@ export default function Home() {
   const searchApps = async () => {
     if (!searchQuery.trim()) return;
     
-    setIsSearching(true);
+    setLoading(true);
     setError("");
     
     try {
@@ -334,7 +447,7 @@ export default function Home() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed");
     } finally {
-      setIsSearching(false);
+      setLoading(false);
     }
   };
 
@@ -344,7 +457,7 @@ export default function Home() {
       return;
     }
 
-    setIsLoading(true);
+    setLoading(true);
     setError("");
     
     try {
@@ -369,10 +482,11 @@ export default function Home() {
       setRatingDistribution(data.rating_distribution || {});
       setAppMetadata(data.app_metadata || null);
       setAppId(data.app_id || "");
+      setTopHelpfulReviews(data.top_helpful_reviews || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch reviews");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
@@ -383,7 +497,7 @@ export default function Home() {
       return;
     }
 
-    setIsAnalyzing(true);
+    setAnalyzing(true);
     setError("");
     console.log("Starting analysis...");
     
@@ -685,7 +799,7 @@ export default function Home() {
       console.error("Analysis error:", err);
       setError(err instanceof Error ? err.message : "Analysis failed");
     } finally {
-      setIsAnalyzing(false);
+      setAnalyzing(false);
     }
   };
 
@@ -695,7 +809,7 @@ export default function Home() {
       return;
     }
 
-    setIsLoading(true);
+    setLoading(true);
     
     try {
       const payload = {
@@ -724,7 +838,7 @@ export default function Home() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Export failed");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
@@ -734,7 +848,7 @@ export default function Home() {
       return;
     }
 
-    setIsLoading(true);
+    setLoading(true);
     
     try {
       const payload = {
@@ -764,7 +878,7 @@ export default function Home() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Export failed");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
@@ -778,6 +892,135 @@ export default function Home() {
   // ===== RENDER =====
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      {/* Criticality Score Modal */}
+      {showCriticalityModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-slate-800 rounded-lg p-6 max-w-md w-full mx-4 border border-slate-700">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold text-white">Impact Score</h3>
+              <button
+                onClick={() => setShowCriticalityModal(false)}
+                className="text-gray-400 hover:text-white text-xl"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center justify-center w-20 h-20 bg-orange-500 rounded-full mb-4">
+                <span className="text-3xl font-bold text-white">99</span>
+              </div>
+              <div className="text-lg font-semibold text-orange-400 mb-1">Critical</div>
+              <div className="text-sm text-gray-400">Impact Score</div>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-600">
+                <h4 className="text-lg font-semibold text-yellow-400 mb-3">Criticality Score Formula</h4>
+                <div className="font-mono text-sm text-green-300 bg-slate-800 p-3 rounded border-l-4 border-green-500 mb-4">
+                  Criticality Score = (Number of complaints × Avg. severity) + (Helpful votes × 2)
+                </div>
+                <p className="text-sm text-gray-300 leading-relaxed">
+                  This formula works well for your goal — prioritizing actual business risk based on what users say and how others react.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Criticality Score Explanation Modal */}
+      {showCriticalityExplanationModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-slate-800 rounded-lg p-6 max-w-2xl w-full mx-4 border border-slate-700 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-bold text-white flex items-center gap-2">
+                <span>🧮</span>
+                How Criticality Score Works
+              </h3>
+              <button
+                onClick={() => setShowCriticalityExplanationModal(false)}
+                className="text-gray-400 hover:text-white text-xl"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="space-y-6">
+              <div className="text-gray-300 text-lg">
+                We calculate how serious each issue is using this formula:
+              </div>
+              
+              <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-600">
+                <div className="font-mono text-lg text-center text-green-300 bg-slate-800 p-4 rounded border-l-4 border-green-500 mb-4">
+                  Criticality Score = Frequency × (Helpful Votes × 2) × Severity
+                </div>
+              </div>
+              
+              <div className="text-gray-300 text-lg mb-4">
+                Here's what each part means:
+              </div>
+              
+              <div className="space-y-4">
+                <div className="bg-slate-900/30 rounded-lg p-4 border border-blue-600/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-blue-400 font-semibold">Frequency</span>
+                    <span className="text-gray-400">=</span>
+                    <span className="text-gray-300">How many users reported this issue.</span>
+                  </div>
+                </div>
+                
+                <div className="bg-slate-900/30 rounded-lg p-4 border border-yellow-600/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-yellow-400 font-semibold">Helpful Votes</span>
+                    <span className="text-gray-400">=</span>
+                    <span className="text-gray-300">How many users agreed the complaint was useful.</span>
+                  </div>
+                  <div className="text-sm text-gray-400 ml-6">
+                    We multiply this by 2 to give more weight to what others find important.
+                  </div>
+                </div>
+                
+                <div className="bg-slate-900/30 rounded-lg p-4 border border-red-600/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-red-400 font-semibold">Severity</span>
+                    <span className="text-gray-400">=</span>
+                    <span className="text-gray-300">How negative the review is, based on AI sentiment analysis.</span>
+                  </div>
+                  <div className="text-sm text-gray-400 ml-6">
+                    A very angry or upset review scores closer to –1, while milder reviews score closer to 0.
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-purple-900/20 rounded-lg p-4 border border-purple-600/30">
+                <div className="text-purple-300 font-semibold mb-2">
+                  We multiply these together to highlight issues that:
+                </div>
+                <ul className="space-y-2 text-gray-300">
+                  <li className="flex items-center gap-2">
+                    <span className="text-green-400">•</span>
+                    <span>Affect many people (high frequency),</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="text-yellow-400">•</span>
+                    <span>Get strong reactions (high severity),</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="text-blue-400">•</span>
+                    <span>And are confirmed by others (high helpful votes).</span>
+                  </li>
+                </ul>
+              </div>
+              
+              <div className="text-center text-gray-300 italic">
+                This helps us prioritize the most urgent and impactful problems.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="container mx-auto px-4 py-8 max-w-4xl">
         {/* Header */}
         <div className="text-center mb-8">
@@ -851,10 +1094,10 @@ export default function Home() {
                     />
                     <Button 
                       onClick={searchApps} 
-                      disabled={isSearching || !searchQuery.trim()}
+                      disabled={loading || !searchQuery.trim()}
                       className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium px-6"
                     >
-                      {isSearching ? (
+                      {loading ? (
                         <>
                           <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                           Searching...
@@ -863,7 +1106,7 @@ export default function Home() {
                         'Search'
                       )}
                     </Button>
-                  </div>
+        </div>
                 </div>
 
                 {/* Search Results */}
@@ -1033,10 +1276,10 @@ export default function Home() {
                 <div className="flex flex-wrap gap-3 pt-4">
                   <Button 
                     onClick={fetchReviews} 
-                    disabled={isLoading || !url.trim()}
+                    disabled={loading || !url.trim()}
                     className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-medium px-6"
                   >
-                    {isLoading ? (
+                    {loading ? (
                       <>
                         <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                         Fetching Reviews...
@@ -1044,30 +1287,6 @@ export default function Home() {
                     ) : (
                       '📝 Get Reviews'
                     )}
-                  </Button>
-
-                  <Button 
-                    onClick={runAnalysis} 
-                    disabled={isAnalyzing || !url.trim()}
-                    className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-medium px-6"
-                  >
-                    {isAnalyzing ? (
-                      <>
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                        Analyzing...
-                      </>
-                    ) : (
-                      '🧠 AI Analysis'
-                    )}
-                  </Button>
-
-                  <Button 
-                    onClick={exportToCSV} 
-                    disabled={isLoading || !url.trim()}
-                    variant="outline"
-                    className="border-slate-600 text-gray-300 hover:bg-slate-700/50 hover:text-white font-medium px-6"
-                  >
-                    📥 Export CSV
                   </Button>
                 </div>
               </CardContent>
@@ -1083,104 +1302,71 @@ export default function Home() {
                       <CardDescription className="text-gray-300">
                         {totalReviews} reviews found • App ID: {appId}
                       </CardDescription>
-                      
-                      {/* Rating Distribution */}
-                      {Object.keys(ratingDistribution).length > 0 && totalFetched > 0 && (
-                        <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
-                          {/* Fetched Sample Distribution */}
-                          <div className="p-4 bg-slate-900/30 border border-slate-600 rounded-lg">
-                            <div className="text-sm font-medium text-gray-300 mb-3">
-                              📥 Fetched Sample ({totalFetched} reviews)
-                            </div>
-                            <div className="space-y-2">
-                              {[5, 4, 3, 2, 1].map((rating) => {
-                                const count = ratingDistribution[rating.toString()] || 0;
-                                const percentage = totalFetched > 0 ? (count / totalFetched) * 100 : 0;
-                                return (
-                                  <div key={`sample-${rating}`} className="flex items-center gap-3">
-                                    <div className="flex items-center gap-1 w-12">
-                                      <span className="text-sm text-gray-300">{rating}</span>
-                                      <span className="text-yellow-400 text-sm">⭐</span>
-                                    </div>
-                                    <div className="flex-1 bg-slate-700 rounded-full h-2 relative overflow-hidden">
-                                      <div 
-                                        className={`h-full rounded-full transition-all duration-300 ${
-                                          rating >= 4 ? 'bg-green-500' : 
-                                          rating >= 3 ? 'bg-yellow-500' : 'bg-red-500'
-                                        }`}
-                                        style={{ width: `${Math.max(percentage, 2)}%` }}
-                                      />
-                                    </div>
-                                    <div className="text-sm text-gray-300 w-16 text-right">
-                                      {count}
-                                    </div>
-                                    <div className="text-xs text-gray-400 w-12 text-right">
-                                      {percentage.toFixed(1)}%
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          {/* Total App Distribution */}
-                          {appMetadata && appMetadata.histogram && (
-                            <div className="p-4 bg-slate-900/30 border border-blue-600/30 rounded-lg">
-                              <div className="text-sm font-medium text-blue-300 mb-3">
-                                🏪 Total App Stats ({appMetadata.total_ratings?.toLocaleString() || 'N/A'} ratings)
-                              </div>
-                              <div className="space-y-2">
-                                {[5, 4, 3, 2, 1].map((rating) => {
-                                  const count = appMetadata.histogram[rating] || 0;
-                                  const percentage = appMetadata.total_ratings > 0 ? (count / appMetadata.total_ratings) * 100 : 0;
-                                  return (
-                                    <div key={`total-${rating}`} className="flex items-center gap-3">
-                                      <div className="flex items-center gap-1 w-12">
-                                        <span className="text-sm text-blue-300">{rating}</span>
-                                        <span className="text-yellow-400 text-sm">⭐</span>
-                                      </div>
-                                      <div className="flex-1 bg-slate-700 rounded-full h-2 relative overflow-hidden">
-                                        <div 
-                                          className={`h-full rounded-full transition-all duration-300 ${
-                                            rating >= 4 ? 'bg-green-500' : 
-                                            rating >= 3 ? 'bg-yellow-500' : 'bg-red-500'
-                                          }`}
-                                          style={{ width: `${Math.max(percentage, 2)}%` }}
-                                        />
-                                      </div>
-                                      <div className="text-sm text-blue-300 w-16 text-right">
-                                        {count.toLocaleString()}
-                                      </div>
-                                      <div className="text-xs text-gray-400 w-12 text-right">
-                                        {percentage.toFixed(1)}%
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                              {appMetadata.title && (
-                                <div className="mt-3 pt-3 border-t border-slate-600">
-                                  <div className="text-xs text-gray-400">
-                                    <div><strong className="text-blue-300">{appMetadata.title}</strong></div>
-                                    <div>by {appMetadata.developer}</div>
-                                    <div>Avg: {appMetadata.average_score?.toFixed(1) || 'N/A'}⭐</div>
-                                    <div>Installs: {appMetadata.installs || 'N/A'}</div>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
-                    <div className="text-right">
-                      <Badge className="bg-blue-600/20 text-blue-300 text-sm px-3 py-1">
-                        {selectedStars.length > 0 ? `Filtered: ${selectedStars.join(', ')}⭐` : 'All ratings'}
-                      </Badge>
+                    
+                    {/* Action Buttons - Moved from Search Section */}
+                    <div className="flex gap-3">
+                      <Button 
+                        onClick={runAnalysis} 
+                        disabled={analyzing || !url.trim()}
+                        className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-medium px-6"
+                      >
+                        {analyzing ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                            Analyzing...
+                          </>
+                        ) : (
+                          '🧠 AI Analysis'
+                        )}
+                      </Button>
+
+                      <Button 
+                        onClick={exportNegativeReviewsToExcel} 
+                        disabled={loading || !reviews.length}
+                        className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-medium px-6 border-2 border-green-500/50 hover:border-green-400"
+                      >
+                        📊 Export to Excel
+                      </Button>
+                      
+                      {selectedStars.length > 0 && (
+                        <Badge className="bg-blue-600/20 text-blue-300 text-sm px-3 py-1">
+                          Filtered: {selectedStars.join(', ')}⭐
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
+                  {/* Rating Distribution */}
+                  {Object.keys(ratingDistribution).length > 0 && (
+                    <div className="mb-6 p-4 bg-slate-900/30 border border-slate-600 rounded-lg">
+                      <h3 className="text-lg font-semibold text-white mb-3">Rating Distribution</h3>
+                      <div className="space-y-2">
+                        {[5, 4, 3, 2, 1].map((star) => {
+                          const count = ratingDistribution[star.toString()] || 0;
+                          const percentage = totalReviews > 0 ? ((count / totalReviews) * 100).toFixed(1) : '0.0';
+                          return (
+                            <div key={star} className="flex items-center gap-3">
+                              <div className="flex items-center gap-1 w-12">
+                                <span className="text-yellow-400">{star}⭐</span>
+                              </div>
+                              <div className="flex-1 bg-slate-700 rounded-full h-2">
+                                <div 
+                                  className="bg-yellow-400 h-2 rounded-full transition-all duration-300"
+                                  style={{ width: `${percentage}%` }}
+                                ></div>
+                              </div>
+                              <div className="text-sm text-gray-300 w-20 text-right">
+                                {count.toLocaleString()} ({percentage}%)
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="space-y-4 max-h-96 overflow-y-auto custom-scrollbar">
                     {reviews.map((review, index) => (
                       <div key={index} className="p-4 bg-slate-900/30 border border-slate-600 rounded-lg">
@@ -1281,130 +1467,142 @@ export default function Home() {
             {/* Overview Tab */}
             {activeAnalysisTab === 'overview' && (
               <>
-                {/* Executive Summary */}
+                {/* Essential Metrics */}
                 <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
                   <CardHeader>
-                    <CardTitle className="text-2xl text-white">📊 Executive Summary</CardTitle>
-                    <CardDescription className="text-gray-300">
-                      AI-powered analysis of {analysisResults.meta.total_reviews} reviews
+                    <CardTitle className="text-2xl text-white">📊 Overview</CardTitle>
+                    <CardDescription className="text-gray-300 flex items-center justify-between">
+                      <span>Key insights from {analysisResults.meta.total_reviews} reviews</span>
+                      <button
+                        onClick={() => setShowCriticalityExplanationModal(true)}
+                        className="text-blue-400 hover:text-blue-300 underline text-sm transition-colors duration-200"
+                      >
+                        🧮 How is criticality score calculated?
+                      </button>
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                       <div className="text-center">
-                        <div className={`text-3xl font-bold ${getHealthColor(analysisResults.insights.summary?.overall_health || 'Unknown')}`}>
-                          {analysisResults.insights.summary?.overall_health || 'Unknown'}
-                        </div>
-                        <div className="text-sm text-gray-400">App Health</div>
-                        <div className="text-xs text-gray-500 mt-2 max-w-[200px] mx-auto">
-                          {getHealthDescription(analysisResults.insights.summary?.overall_health || 'Unknown', analysisResults)}
-                        </div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-3xl font-bold text-purple-400">
-                          {analysisResults.insights.urgency_score}/100
-                        </div>
-                        <div className="text-sm text-gray-400">Urgency Score</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-3xl font-bold text-blue-400">
+                        <div className="text-4xl font-bold text-blue-400 mb-2">
                           {analysisResults.statistics.avg_rating.toFixed(1)}⭐
                         </div>
-                        <div className="text-sm text-gray-400">Average Rating</div>
+                        <div className="text-lg text-gray-300">Average Rating</div>
                       </div>
                       <div className="text-center">
-                        <div className={`text-3xl font-bold ${getSentimentColor(analysisResults.insights.sentiment_trends.overall_sentiment)}`}>
+                        <div className={`text-4xl font-bold mb-2 ${getSentimentColor(analysisResults.insights.sentiment_trends.overall_sentiment)}`}>
                           {analysisResults.insights.sentiment_trends.overall_sentiment}
                         </div>
-                        <div className="text-sm text-gray-400">Overall Sentiment</div>
-                      </div>
-                    </div>
-                    
-                    <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="p-4 bg-slate-900/30 rounded-lg">
-                        <div className="text-sm text-gray-400 mb-1">Main Concern</div>
-                        <div className="text-white font-medium">{analysisResults.insights.summary?.main_concern || 'No major concerns identified'}</div>
-                      </div>
-                      <div className="p-4 bg-slate-900/30 rounded-lg">
-                        <div className="text-sm text-gray-400 mb-1">Top Opportunity</div>
-                        <div className="text-white font-medium">{analysisResults.insights.summary?.top_opportunity || 'No opportunities identified'}</div>
+                        <div className="text-lg text-gray-300">Overall Sentiment</div>
                       </div>
                     </div>
                   </CardContent>
                 </Card>
 
-                {/* Priority Issues */}
-                {analysisResults.insights.priority_issues?.length > 0 && (
-                  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
+                {/* Review Summaries */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Positive Summary */}
+                  <Card className="bg-green-900/20 backdrop-blur-sm border-green-600/30">
                     <CardHeader>
-                      <CardTitle className="text-2xl text-white">🚨 Priority Issues</CardTitle>
-                      <CardDescription className="text-gray-300">
-                        Critical problems that need immediate attention
+                      <CardTitle className="text-xl text-green-300 flex items-center gap-2">
+                        <span>😊</span>
+                        Positive Reviews Summary
+                      </CardTitle>
+                      <CardDescription className="text-green-200">
+                        {sentimentResults?.classification_meta?.positive_percentage?.toFixed(1) || 
+                         analysisResults?.insights?.sentiment_trends?.sentiment_distribution?.positive?.toFixed(1) || '65'}% 
+                        of users are satisfied
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <div className="space-y-4">
-                        {analysisResults.insights.priority_issues.slice(0, 5).map((issue, index) => (
-                          <div key={index} className="flex items-center justify-between p-4 bg-slate-900/30 rounded-lg">
-                            <div className="flex items-center gap-4">
-                              <div className="text-2xl font-bold text-gray-400">#{index + 1}</div>
-                              <div>
-                                <div className="font-semibold text-white">{issue.issue_type}</div>
-                                <div className="text-sm text-gray-400">
-                                  {issue.frequency} reports ({issue.percentage}% of reviews)
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <Badge className={`${getSeverityColor(issue.severity_level)} text-white`}>
-                                {issue.severity_level}
-                              </Badge>
-                              <div className="text-right">
-                                <div className="text-lg font-bold text-purple-400">{issue.priority_score}</div>
-                                <div className="text-xs text-gray-400">Priority Score</div>
-                              </div>
-                            </div>
+                      {sentimentResults?.positive_themes?.length > 0 ? (
+                        <div className="space-y-4">
+                          <div className="text-sm text-green-200 mb-3">
+                            Users love most about this app:
                           </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {/* Recommendations */}
-                {analysisResults.insights.recommendations?.length > 0 && (
-                  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
-                    <CardHeader>
-                      <CardTitle className="text-2xl text-white">🎯 Strategic Recommendations</CardTitle>
-                      <CardDescription className="text-gray-300">
-                        Actionable insights to improve your app
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        {analysisResults.insights.recommendations.slice(0, 8).map((rec, index) => (
-                          <div key={index} className="p-4 bg-slate-900/30 rounded-lg">
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <Badge className={`
-                                  ${rec.priority === 'High' ? 'bg-red-600' :
-                                    rec.priority === 'Medium' ? 'bg-yellow-600' : 'bg-green-600'
-                                  } text-white text-xs`}>
-                                  {rec.priority}
+                          {sentimentResults.positive_themes.slice(0, 3).map((theme, index) => (
+                            <div key={index} className="bg-green-800/30 rounded-lg p-4">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="font-semibold text-green-100">{theme.theme_type}</div>
+                                <Badge className="bg-green-600 text-white text-xs">
+                                  {theme.percentage.toFixed(1)}%
                                 </Badge>
-                                <span className="text-sm text-gray-400">{rec.category}</span>
                               </div>
-                              <div className="text-xs text-gray-500">{rec.timeline}</div>
+                              <div className="text-sm text-green-200">
+                                {theme.praise_count} positive mentions
+                              </div>
+                              {theme.actual_reviews && theme.actual_reviews.length > 0 && (
+                                <div className="mt-3 p-3 bg-green-900/40 rounded text-sm text-green-100 italic">
+                                  "{theme.actual_reviews[0].full_text.length > 120 
+                                    ? `${theme.actual_reviews[0].full_text.substring(0, 120)}...` 
+                                    : theme.actual_reviews[0].full_text}"
+                                </div>
+                              )}
                             </div>
-                            <div className="font-semibold text-white mb-1">{rec.action}</div>
-                            <div className="text-sm text-gray-400 mb-2">{rec.impact}</div>
-                            <div className="text-xs text-gray-500">Affects: {rec.affected_users}</div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <div className="text-green-300 mb-2">✨</div>
+                          <div className="text-green-200">
+                            Positive sentiment analysis will be available after running the analysis.
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
-                )}
+
+                  {/* Issue Category Breakdown */}
+                  <Card className="bg-red-900/20 backdrop-blur-sm border-red-600/30">
+                    <CardHeader>
+                      <CardTitle className="text-xl text-red-300 flex items-center gap-2">
+                        <span>😞</span>
+                        Issue Category Breakdown
+                      </CardTitle>
+                      <CardDescription className="text-red-200">
+                        {sentimentResults?.classification_meta?.negative_percentage?.toFixed(1) || 
+                         analysisResults?.insights?.sentiment_trends?.sentiment_distribution?.negative?.toFixed(1) || '25'}% 
+                        of users reported issues
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {sentimentResults?.negative_themes?.length > 0 ? (
+                        <div className="space-y-4">
+                          <div className="text-sm text-red-200 mb-3">
+                            Main issues users are facing:
+                          </div>
+                          {sentimentResults.negative_themes.slice(0, 3).map((theme, index) => (
+                            <div key={index} className="bg-red-800/30 rounded-lg p-4">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="font-semibold text-red-100">{theme.issue_type}</div>
+                                <Badge className="bg-red-600 text-white text-xs">
+                                  {theme.percentage.toFixed(1)}%
+                                </Badge>
+                              </div>
+                              <div className="text-sm text-red-200">
+                                {theme.complaint_count} complaints
+                              </div>
+                              {theme.actual_reviews && theme.actual_reviews.length > 0 && (
+                                <div className="mt-3 p-3 bg-red-900/40 rounded text-sm text-red-100 italic">
+                                  "{theme.actual_reviews[0].full_text.length > 120 
+                                    ? `${theme.actual_reviews[0].full_text.substring(0, 120)}...` 
+                                    : theme.actual_reviews[0].full_text}"
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <div className="text-red-300 mb-2">🔍</div>
+                          <div className="text-red-200">
+                            Negative sentiment analysis will be available after running the analysis.
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
               </>
             )}
 
@@ -1498,7 +1696,48 @@ export default function Home() {
                       </div>
                     </CardContent>
                   </Card>
-                ) : (
+                ) : null}
+
+                {/* Most Helpful Positive Reviews */}
+                {topHelpfulReviews?.positive && topHelpfulReviews.positive.length > 0 && (
+                  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
+                    <CardHeader>
+                      <CardTitle className="text-2xl text-white">👍 Most Helpful Positive Reviews</CardTitle>
+                      <CardDescription className="text-gray-300">
+                        Praise that other users found most valuable
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-4">
+                        {topHelpfulReviews.positive.slice(0, 5).map((review, index) => (
+                          <div key={index} className="bg-green-900/10 border border-green-700/30 rounded-lg p-4">
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-3">
+                                <Badge className="bg-green-600 text-white text-sm">
+                                  {review.rating}⭐
+                                </Badge>
+                                <span className="text-green-300 font-medium">
+                                  👍 {review.thumbsUpCount || 0} users found this helpful
+                                </span>
+                              </div>
+                              <div className="text-xs text-gray-400">
+                                {review.userName !== 'Anonymous' ? `by ${review.userName}` : ''}
+                              </div>
+                            </div>
+                            <div className="text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
+                              {review.review}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-2">
+                              {new Date(review.date).toLocaleDateString()}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {!sentimentResults?.positive_themes?.length && !topHelpfulReviews?.positive?.length && (
                   <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
                     <CardContent className="text-center py-12">
                       <div className="text-6xl mb-4">😊</div>
@@ -1518,336 +1757,228 @@ export default function Home() {
               </>
             )}
 
-            {/* Negative Tab */}
+            {/* Negative Reviews Analysis Tab */}
             {activeAnalysisTab === 'negative' && (
               <>
-                {sentimentResults?.negative_themes?.length > 0 || analysisResults?.insights ? (
-                  <div className="space-y-6">
-                    {/* Export Button for Negative Reviews */}
-                    <div className="flex justify-end">
-                      <Button
-                        onClick={exportNegativeReviewsToExcel}
-                        className="bg-red-600 hover:bg-red-700 text-white"
-                        disabled={isLoading}
-                      >
-                        {isLoading ? (
-                          <>
-                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
-                            Exporting...
-                          </>
-                        ) : (
-                          <>
-                            📊 Export Negative Reviews to Excel
-                          </>
-                        )}
-                      </Button>
-                    </div>
-
-                    {/* Critical Issues Overview */}
-                    <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
-                      <CardHeader>
-                        <CardTitle className="text-2xl text-white">🚨 Critical Issues Analysis</CardTitle>
-                        <CardDescription className="text-gray-300">
-                          Comprehensive analysis of negative feedback and critical problems
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-                          <div className="text-center p-4 bg-red-900/20 rounded-lg border border-red-700/30">
-                            <div className="text-2xl font-bold text-red-400">
-                              {sentimentResults?.classification_meta?.negative_percentage?.toFixed(1) || analysisResults?.insights?.sentiment_trends?.sentiment_distribution?.negative?.toFixed(1) || '25'}%
-                            </div>
-                            <div className="text-sm text-gray-400">Negative Reviews</div>
-                          </div>
-                          <div className="text-center p-4 bg-orange-900/20 rounded-lg border border-orange-700/30">
-                            <div className="text-2xl font-bold text-orange-400">
-                              {analysisResults?.insights?.priority_issues?.length || '5'}
-                            </div>
-                            <div className="text-sm text-gray-400">Priority Issues</div>
-                          </div>
-                          <div className="text-center p-4 bg-yellow-900/20 rounded-lg border border-yellow-700/30">
-                            <div className="text-2xl font-bold text-yellow-400">
-                              {analysisResults?.insights?.urgency_score || '75'}/100
-                            </div>
-                            <div className="text-sm text-gray-400">Urgency Score</div>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    {/* Critical Themes from Analysis */}
-                    {analysisResults?.insights?.critical_themes && analysisResults.insights.critical_themes.length > 0 && (
-                      <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
-                        <CardHeader>
-                          <CardTitle className="text-2xl text-white">⚠️ Critical Themes Analysis</CardTitle>
-                          <CardDescription className="text-gray-300">
-                            Most problematic areas identified by AI analysis
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="space-y-4">
-                            {analysisResults.insights.critical_themes.slice(0, 8).map((theme, index) => (
-                              <div key={index} className="bg-slate-900/30 rounded-lg p-4">
-                                <div className="flex items-center justify-between mb-3">
-                                  <div className="flex items-center gap-3">
-                                    <div className="text-lg font-bold text-gray-400">#{index + 1}</div>
-                                    <div>
-                                      <div className="font-semibold text-white">{theme.theme_name}</div>
-                                      <div className="text-sm text-gray-400">
-                                        {theme.review_count} reviews ({theme.percentage.toFixed(1)}% of total)
-                                      </div>
-                                    </div>
+                {/* Negative Themes Section - First section like positive themes */}
+                {sentimentResults?.negative_themes?.length > 0 ? (
+                  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
+                    <CardHeader>
+                      <CardTitle className="text-2xl text-white">😞 Negative Themes</CardTitle>
+                      <CardDescription className="text-gray-300">
+                        What users complain about - {sentimentResults.classification_meta.negative_percentage.toFixed(1)}% of reviews ({sentimentResults.classification_meta.negative_reviews} reviews)
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-6">
+                        {sentimentResults.negative_themes.slice(0, 5).map((theme, index) => (
+                          <div key={index} className="bg-slate-900/30 rounded-lg overflow-hidden">
+                            {/* Theme Header */}
+                            <div className="flex items-center justify-between p-4 border-b border-slate-700">
+                              <div className="flex items-center gap-4">
+                                <div className="text-2xl font-bold text-gray-400">#{index + 1}</div>
+                                <div>
+                                  <div className="font-semibold text-white">{theme.issue_type}</div>
+                                  <div className="text-sm text-gray-400">
+                                    {theme.complaint_count} complaints ({theme.percentage.toFixed(1)}% of negative reviews)
                                   </div>
-                                  <Badge className={`${getSeverityColor(theme.severity)} text-white`}>
-                                    {theme.severity}
-                                  </Badge>
                                 </div>
-                                
-                                {/* Keywords */}
-                                <div className="mb-3">
-                                  <div className="text-xs text-gray-400 mb-2">Related Keywords:</div>
-                                  <div className="flex flex-wrap gap-1">
-                                    {theme.keywords.map((keyword, i) => (
-                                      <span key={i} className="bg-gray-700/40 text-gray-300 text-xs px-2 py-1 rounded">
-                                        {keyword}
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <Badge className={`text-white ${
+                                  theme.severity_level === 'High' ? 'bg-red-600' :
+                                  theme.severity_level === 'Medium' ? 'bg-orange-600' : 'bg-yellow-600'
+                                }`}>
+                                  {theme.severity_level}
+                                </Badge>
+                                <div className="text-right">
+                                  <div className="text-lg font-bold text-red-400">{theme.combined_score}</div>
+                                  <div className="text-xs text-gray-400">Impact Score</div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* Actual Reviews */}
+                            {theme.actual_reviews && theme.actual_reviews.length > 0 && (
+                              <div className="p-4">
+                                <h4 className="text-sm font-medium text-gray-300 mb-3">What users are saying:</h4>
+                                <div className="space-y-3">
+                                  {theme.actual_reviews.slice(0, 3).map((review, reviewIndex) => (
+                                    <div key={reviewIndex} className="bg-slate-800/40 rounded-lg p-3">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-xs text-gray-400">★ {review.rating}/5</span>
+                                          <span className="text-xs text-gray-500">by {review.author}</span>
+                                        </div>
+                                        <span className="text-xs text-gray-500">{review.date}</span>
+                                      </div>
+                                      
+                                      {/* Highlighted Phrases */}
+                                      {review.highlighted_phrases && review.highlighted_phrases.length > 0 && (
+                                        <div className="mb-2">
+                                          <div className="text-xs text-gray-400 mb-1">Problem highlights:</div>
+                                          <div className="flex flex-wrap gap-1">
+                                            {review.highlighted_phrases.map((phrase, phraseIndex) => (
+                                              <span key={phraseIndex} className="inline-block bg-red-900/40 text-red-300 text-xs px-2 py-1 rounded border border-red-700/30">
+                                                "{phrase}"
+                                              </span>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                      
+                                      {/* Full Review Text (truncated) */}
+                                      <div className="text-sm text-gray-300">
+                                        {review.full_text.length > 200 
+                                          ? `${review.full_text.substring(0, 200)}...` 
+                                          : review.full_text
+                                        }
+                                      </div>
+                                      
+                                      {/* Matched Keyword */}
+                                      {review.matched_keyword && (
+                                        <div className="mt-2 text-xs text-gray-500">
+                                          Matched: <span className="text-red-400">{review.matched_keyword}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : null}
+
+                {/* AI-Detected Complaint Clusters - Second section */}
+                {analysisResults?.insights?.negative_cluster_analysis?.cluster_summary?.length > 0 ? (
+                  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
+                    <CardHeader>
+                      <CardTitle className="text-2xl text-white">😞 AI-Detected Complaint Clusters</CardTitle>
+                      <CardDescription className="text-gray-300">
+                        {analysisResults.insights.negative_cluster_analysis?.coverage_sentence}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-6">
+                        {analysisResults.insights.negative_cluster_analysis.cluster_summary.slice(0, 5).map((cluster, index) => (
+                          <div key={index} className="bg-slate-900/30 rounded-lg overflow-hidden">
+                            {/* Cluster Header */}
+                            <div className="flex items-center justify-between p-4 border-b border-slate-700">
+                              <div className="flex items-center gap-4">
+                                <div className="text-2xl font-bold text-gray-400">#{index + 1}</div>
+                                <div>
+                                  <div className="font-semibold text-white">{cluster['Cluster Label']}</div>
+                                  <div className="text-sm text-gray-400">
+                                    {cluster['Review Count']} complaints ({cluster['Percent of Clustered Reviews']}% of clustered reviews)
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <Badge className={`text-white ${
+                                  cluster['Concern Level'] === 'High' ? 'bg-red-600' :
+                                  cluster['Concern Level'] === 'Medium' ? 'bg-orange-600' : 'bg-yellow-600'
+                                }`}>
+                                  {cluster['Concern Level']}
+                                </Badge>
+                                <div className="text-right">
+                                  <div className="text-lg font-bold text-red-400">{cluster['Criticality Score']}</div>
+                                  <div className="text-xs text-gray-400">Combined Impact Score</div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* What users are saying */}
+                            <div className="p-4">
+                              <h4 className="text-sm font-medium text-gray-300 mb-3">What users are saying:</h4>
+                              
+                              {/* Top Complaint Phrases */}
+                              {cluster['Top Complaint Phrases'] && cluster['Top Complaint Phrases'].length > 0 && (
+                                <div className="mb-4">
+                                  <div className="text-xs text-gray-400 mb-2">Common complaint phrases:</div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {cluster['Top Complaint Phrases'].map((phrase, phraseIndex) => (
+                                      <span key={phraseIndex} className="inline-block bg-red-900/40 text-red-300 text-xs px-2 py-1 rounded border border-red-700/30">
+                                        "{phrase.phrase}" ({phrase.frequency}×)
                                       </span>
                                     ))}
                                   </div>
                                 </div>
-                                
-                                {/* Problematic Phrases */}
-                                {theme.problematic_phrases && theme.problematic_phrases.length > 0 && (
-                                  <div>
-                                    <div className="text-xs text-gray-400 mb-2">Problematic Phrases Found:</div>
-                                    <div className="flex flex-wrap gap-1">
-                                      {theme.problematic_phrases.map((phrase, i) => (
-                                        <span key={i} className="bg-red-900/40 text-red-300 text-xs px-2 py-1 rounded border border-red-700/30">
-                                          "{phrase}"
-                                        </span>
-                                      ))}
+                              )}
+                              
+                              {/* Most Helpful Complaint */}
+                              {cluster['Most Helpful Complaint'] && (
+                                <div className="bg-slate-800/40 rounded-lg p-3">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-red-400">👍 {cluster['Most Helpful Complaint'].thumbsUpCount} found helpful</span>
                                     </div>
+                                    <span className="text-xs text-gray-500">{cluster['Most Helpful Complaint'].date}</span>
                                   </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    )}
-
-                    {/* Detailed Critical Issues */}
-                    <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
-                      <CardHeader>
-                        <CardTitle className="text-2xl text-white">🔍 Detailed Critical Issues</CardTitle>
-                        <CardDescription className="text-gray-300">
-                          In-depth analysis of specific problem categories
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="space-y-6">
-                          {/* Scam & Fraud Issues */}
-                          <div className="bg-red-900/10 border border-red-700/30 rounded-lg p-4">
-                            <div className="flex items-center gap-3 mb-3">
-                              <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                              <h4 className="text-lg font-semibold text-white">🚫 Scam & Fraud Reports</h4>
-                              <Badge className="bg-red-600 text-white">Critical</Badge>
-                            </div>
-                            <div className="text-sm text-gray-300 mb-3">
-                              Issues related to fraudulent activities, scams, fake content, and deceptive practices
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="bg-slate-800/40 rounded p-3">
-                                <div className="text-xs text-red-400 mb-1">Scam Keywords Found:</div>
-                                <div className="flex flex-wrap gap-1">
-                                  {['scam', 'fake', 'fraud', 'cheat', 'steal', 'money grabbing'].map((keyword, i) => (
-                                    <span key={i} className="bg-red-900/40 text-red-300 text-xs px-2 py-1 rounded">
-                                      {keyword}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                              <div className="bg-slate-800/40 rounded p-3">
-                                <div className="text-xs text-red-400 mb-1">Impact Level:</div>
-                                <div className="text-sm text-white">High Risk - Immediate Action Required</div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Payment & Refund Issues */}
-                          <div className="bg-orange-900/10 border border-orange-700/30 rounded-lg p-4">
-                            <div className="flex items-center gap-3 mb-3">
-                              <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
-                              <h4 className="text-lg font-semibold text-white">💳 Payment & Refund Issues</h4>
-                              <Badge className="bg-orange-600 text-white">High</Badge>
-                            </div>
-                            <div className="text-sm text-gray-300 mb-3">
-                              Problems with payments, billing, refunds, and subscription management
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="bg-slate-800/40 rounded p-3">
-                                <div className="text-xs text-orange-400 mb-1">Payment Keywords:</div>
-                                <div className="flex flex-wrap gap-1">
-                                  {['refund', 'payment', 'charged', 'billing', 'subscription', 'cancel'].map((keyword, i) => (
-                                    <span key={i} className="bg-orange-900/40 text-orange-300 text-xs px-2 py-1 rounded">
-                                      {keyword}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                              <div className="bg-slate-800/40 rounded p-3">
-                                <div className="text-xs text-orange-400 mb-1">Financial Impact:</div>
-                                <div className="text-sm text-white">Revenue Risk - Review Billing Process</div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Performance & Technical Issues */}
-                          <div className="bg-yellow-900/10 border border-yellow-700/30 rounded-lg p-4">
-                            <div className="flex items-center gap-3 mb-3">
-                              <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                              <h4 className="text-lg font-semibold text-white">⚡ Performance & Technical Issues</h4>
-                              <Badge className="bg-yellow-600 text-white">Medium</Badge>
-                            </div>
-                            <div className="text-sm text-gray-300 mb-3">
-                              App crashes, slow performance, loading issues, and technical problems
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="bg-slate-800/40 rounded p-3">
-                                <div className="text-xs text-yellow-400 mb-1">Technical Keywords:</div>
-                                <div className="flex flex-wrap gap-1">
-                                  {['crash', 'slow', 'loading', 'freeze', 'bug', 'error'].map((keyword, i) => (
-                                    <span key={i} className="bg-yellow-900/40 text-yellow-300 text-xs px-2 py-1 rounded">
-                                      {keyword}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                              <div className="bg-slate-800/40 rounded p-3">
-                                <div className="text-xs text-yellow-400 mb-1">User Impact:</div>
-                                <div className="text-sm text-white">User Experience - Optimize Performance</div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Usability & Design Issues */}
-                          <div className="bg-blue-900/10 border border-blue-700/30 rounded-lg p-4">
-                            <div className="flex items-center gap-3 mb-3">
-                              <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                              <h4 className="text-lg font-semibold text-white">🎨 Usability & Design Issues</h4>
-                              <Badge className="bg-blue-600 text-white">Medium</Badge>
-                            </div>
-                            <div className="text-sm text-gray-300 mb-3">
-                              User interface problems, confusing navigation, and design complaints
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="bg-slate-800/40 rounded p-3">
-                                <div className="text-xs text-blue-400 mb-1">Design Keywords:</div>
-                                <div className="flex flex-wrap gap-1">
-                                  {['confusing', 'hard to use', 'bad design', 'complicated', 'unclear'].map((keyword, i) => (
-                                    <span key={i} className="bg-blue-900/40 text-blue-300 text-xs px-2 py-1 rounded">
-                                      {keyword}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                              <div className="bg-slate-800/40 rounded p-3">
-                                <div className="text-xs text-blue-400 mb-1">Design Impact:</div>
-                                <div className="text-sm text-white">UX Improvement - Redesign UI/UX</div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    {/* Actual User Complaints */}
-                    {sentimentResults?.negative_themes && sentimentResults.negative_themes.length > 0 && (
-                      <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
-                        <CardHeader>
-                          <CardTitle className="text-2xl text-white">💬 Actual User Complaints</CardTitle>
-                          <CardDescription className="text-gray-300">
-                            Real user feedback showing specific problems - {sentimentResults.classification_meta.negative_percentage.toFixed(1)}% of reviews ({sentimentResults.classification_meta.negative_reviews} reviews)
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="space-y-6">
-                            {sentimentResults.negative_themes.slice(0, 8).map((theme, index) => (
-                              <div key={index} className="bg-slate-900/30 rounded-lg overflow-hidden">
-                                {/* Theme Header */}
-                                <div className="flex items-center justify-between p-4 border-b border-slate-700">
-                                  <div className="flex items-center gap-4">
-                                    <div className="text-2xl font-bold text-gray-400">#{index + 1}</div>
-                                    <div>
-                                      <div className="font-semibold text-white">{theme.issue_type}</div>
-                                      <div className="text-sm text-gray-400">
-                                        {theme.complaint_count} complaints ({theme.percentage.toFixed(1)}% of negative reviews)
-                                      </div>
-                                    </div>
+                                  
+                                  <div className="text-sm text-gray-300">
+                                    {cluster['Most Helpful Complaint'].text.length > 200 
+                                      ? `${cluster['Most Helpful Complaint'].text.substring(0, 200)}...` 
+                                      : cluster['Most Helpful Complaint'].text
+                                    }
                                   </div>
-                                  <div className="flex items-center gap-3">
-                                    <Badge className={`${getSeverityColor(theme.severity_level)} text-white`}>
-                                      {theme.severity_level}
-                                    </Badge>
-                                    <div className="text-right">
-                                      <div className="text-lg font-bold text-red-400">{theme.combined_score}</div>
-                                      <div className="text-xs text-gray-400">Issue Score</div>
-                                    </div>
+                                  
+                                  <div className="mt-2 text-xs text-gray-500">
+                                    Total helpful votes in cluster: <span className="text-red-400">{cluster['Total Helpful Votes']}</span>
                                   </div>
                                 </div>
-                                
-                                {/* Actual Reviews */}
-                                {theme.actual_reviews && theme.actual_reviews.length > 0 && (
-                                  <div className="p-4">
-                                    <h4 className="text-sm font-medium text-gray-300 mb-3">User complaints:</h4>
-                                    <div className="space-y-3">
-                                      {theme.actual_reviews.slice(0, 5).map((review, reviewIndex) => (
-                                        <div key={reviewIndex} className="bg-slate-800/40 rounded-lg p-3">
-                                          <div className="flex items-center justify-between mb-2">
-                                            <div className="flex items-center gap-2">
-                                              <span className="text-xs text-gray-400">★ {review.rating}/5</span>
-                                              <span className="text-xs text-gray-500">by {review.author}</span>
-                                            </div>
-                                            <span className="text-xs text-gray-500">{review.date}</span>
-                                          </div>
-                                          
-                                          {/* Highlighted Phrases */}
-                                          {review.highlighted_phrases && review.highlighted_phrases.length > 0 && (
-                                            <div className="mb-2">
-                                              <div className="text-xs text-gray-400 mb-1">Problem indicators:</div>
-                                              <div className="flex flex-wrap gap-1">
-                                                {review.highlighted_phrases.map((phrase, phraseIndex) => (
-                                                  <span key={phraseIndex} className="inline-block bg-red-900/40 text-red-300 text-xs px-2 py-1 rounded border border-red-700/30">
-                                                    "{phrase}"
-                                                  </span>
-                                                ))}
-                                              </div>
-                                            </div>
-                                          )}
-                                          
-                                          {/* Full Review Text */}
-                                          <div className="text-sm text-gray-300">
-                                            {review.full_text}
-                                          </div>
-                                          
-                                          {/* Matched Keyword */}
-                                          {review.matched_keyword && (
-                                            <div className="mt-2 text-xs text-gray-500">
-                                              Matched: <span className="text-red-400">{review.matched_keyword}</span>
-                                            </div>
-                                          )}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
+                              )}
+                            </div>
                           </div>
-                        </CardContent>
-                      </Card>
-                    )}
-                  </div>
-                ) : (
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : null}
+
+                {/* Most Helpful Negative Reviews */}
+                {topHelpfulReviews?.negative && topHelpfulReviews.negative.length > 0 && (
+                  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
+                    <CardHeader>
+                      <CardTitle className="text-2xl text-white">👎 Most Helpful Critical Reviews</CardTitle>
+                      <CardDescription className="text-gray-300">
+                        Complaints that other users found most valuable
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-4">
+                        {topHelpfulReviews.negative.slice(0, 5).map((review, index) => (
+                          <div key={index} className="bg-red-900/10 border border-red-700/30 rounded-lg p-4">
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-3">
+                                <Badge className="bg-red-600 text-white text-sm">
+                                  {review.rating}⭐
+                                </Badge>
+                                <span className="text-red-300 font-medium">
+                                  👍 {review.thumbsUpCount || 0} users found this helpful
+                                </span>
+                              </div>
+                              <div className="text-xs text-gray-400">
+                                {review.userName !== 'Anonymous' ? `by ${review.userName}` : ''}
+                              </div>
+                            </div>
+                            <div className="text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
+                              {review.review}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-2">
+                              {new Date(review.date).toLocaleDateString()}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {!sentimentResults?.negative_themes?.length && !topHelpfulReviews?.negative?.length && (
                   <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
                     <CardContent className="text-center py-12">
                       <div className="text-6xl mb-4">😞</div>
@@ -1864,6 +1995,197 @@ export default function Home() {
                     </CardContent>
                   </Card>
                 )}
+
+                {/* Critical User Complaints - Third section (Improved Criticality Scoring) */}
+                {analysisResults?.insights?.critical_user_complaints?.critical_issues?.length > 0 ? (
+                  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
+                    <CardHeader>
+                      <CardTitle className="text-2xl text-white">🔴 Critical User Complaints</CardTitle>
+                      <CardDescription className="text-gray-300">
+                        <div className="mb-2">
+                          <strong className="text-red-400">Criticality Formula:</strong> 
+                          <span className="font-mono text-yellow-300 ml-2">
+                            (Complaint Count × Avg Severity) + (Helpful Votes × 2)
+                          </span>
+                        </div>
+                        <div className="text-sm">
+                          Issues ranked by criticality score using semantic similarity clustering
+                        </div>
+                        <span className="text-xs text-gray-400">
+                          Analyzing {analysisResults.insights.critical_user_complaints.total_negative_reviews} negative reviews
+                        </span>
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-6">
+                        {analysisResults.insights.critical_user_complaints.critical_issues.slice(0, 5).map((issue, index) => (
+                          <div key={index} className="bg-slate-900/30 rounded-lg overflow-hidden">
+                            {/* Issue Header */}
+                            <div className="flex items-center justify-between p-4 border-b border-slate-700">
+                              <div className="flex items-center gap-4">
+                                <div className="text-2xl font-bold text-gray-400">#{index + 1}</div>
+                                <div>
+                                  <div className="font-semibold text-white">{issue.theme}</div>
+                                  <div className="text-sm text-gray-400">
+                                    {issue.complaint_count} complaints ({issue.percentage_of_negative}% of negative reviews)
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <button
+                                  onClick={() => setShowCriticalityModal(true)}
+                                  title="Click to see formula explanation"
+                                >
+                                  <Badge className={`text-white cursor-pointer hover:opacity-80 transition-opacity ${
+                                    issue.criticality_label === 'Critical' ? 'bg-red-600' :
+                                    issue.criticality_label === 'Major' ? 'bg-orange-600' : 'bg-yellow-600'
+                                  }`}>
+                                    {issue.criticality_tag}
+                                  </Badge>
+                                </button>
+                                <div className="text-right">
+                                  <button
+                                    onClick={() => setShowCriticalityModal(true)}
+                                    className="text-lg font-bold text-red-400 hover:text-red-300 transition-colors cursor-pointer"
+                                    title="Click to see formula explanation"
+                                  >
+                                    {issue.criticality_score.toFixed(1)}
+                                  </button>
+                                  <div className="text-xs text-gray-400">Criticality Score</div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* Issue Details */}
+                            <div className="p-4">
+                              {/* Scoring Breakdown */}
+                              <div className="mb-4 grid grid-cols-3 gap-4 text-center">
+                                <div className="bg-slate-800/40 rounded-lg p-3">
+                                  <div className="text-lg font-bold text-blue-400">{issue.complaint_count}</div>
+                                  <div className="text-xs text-gray-400">Total Complaints</div>
+                                </div>
+                                <div className="bg-slate-800/40 rounded-lg p-3">
+                                  <div className="text-lg font-bold text-yellow-400">{issue.total_helpful_votes}</div>
+                                  <div className="text-xs text-gray-400">Helpful Votes</div>
+                                </div>
+                                <div className="bg-slate-800/40 rounded-lg p-3">
+                                  <div className="text-lg font-bold text-orange-400">{issue.avg_severity.toFixed(1)}</div>
+                                  <div className="text-xs text-gray-400">Avg Severity</div>
+                                </div>
+                              </div>
+                              
+                              {/* Top Problem Phrases with Frequencies */}
+                              {issue.top_problem_phrases && issue.top_problem_phrases.length > 0 && (
+                                <div className="mb-4">
+                                  <div className="text-sm font-medium text-gray-300 mb-2">🔍 Top Complaint Phrases:</div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {issue.top_problem_phrases.slice(0, 5).map((phrase, phraseIndex) => (
+                                      <span key={phraseIndex} className="inline-flex items-center gap-1 bg-red-900/40 text-red-300 text-xs px-3 py-1 rounded-full border border-red-700/30">
+                                        <span>"{phrase.phrase}"</span>
+                                        <span className="bg-red-700/50 text-red-200 px-1.5 py-0.5 rounded-full text-xs font-bold">
+                                          {phrase.frequency}×
+                                        </span>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {/* Most Helpful Review */}
+                              {issue.most_helpful_review && (
+                                <div className="bg-slate-800/40 rounded-lg p-4 border border-slate-700/30">
+                                  <div className="flex items-center justify-between mb-3">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-medium text-gray-400">Most Helpful Review:</span>
+                                      <Badge className="bg-red-600 text-white text-xs">
+                                        {issue.most_helpful_review.rating}⭐
+                                      </Badge>
+                                      <span className="text-xs text-red-400 font-medium">
+                                        👍 {issue.most_helpful_review.thumbsUpCount} helpful
+                                      </span>
+                                    </div>
+                                    <span className="text-xs text-gray-500">{issue.most_helpful_review.date}</span>
+                                  </div>
+                                  
+                                  <div className="text-sm text-gray-300 bg-slate-900/30 p-3 rounded border-l-4 border-red-500">
+                                    {issue.most_helpful_review.text.length > 250 
+                                      ? `${issue.most_helpful_review.text.substring(0, 250)}...` 
+                                      : issue.most_helpful_review.text
+                                    }
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      
+                      {/* Summary Table */}
+                      {analysisResults.insights.critical_user_complaints.summary_table && 
+                       analysisResults.insights.critical_user_complaints.summary_table.length > 0 && (
+                        <div className="mt-6">
+                          <h3 className="text-lg font-semibold text-white mb-4">📊 Critical Issues Summary</h3>
+                          <div className="overflow-x-auto">
+                            <table className="w-full bg-slate-900/30 rounded-lg border border-slate-700">
+                              <thead>
+                                <tr className="border-b border-slate-700">
+                                  <th className="text-left p-3 text-gray-300 font-medium">Theme</th>
+                                  <th className="text-center p-3 text-gray-300 font-medium">% of Reviews</th>
+                                  <th className="text-center p-3 text-gray-300 font-medium">Complaint Count</th>
+                                  <th className="text-center p-3 text-gray-300 font-medium">Criticality Score</th>
+                                  <th className="text-center p-3 text-gray-300 font-medium">Label</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {analysisResults.insights.critical_user_complaints.summary_table.map((row, index) => (
+                                  <tr key={index} className="border-b border-slate-700/50 hover:bg-slate-800/20">
+                                    <td className="p-3 text-white font-medium">{row.theme}</td>
+                                    <td className="p-3 text-center text-gray-300">{row.percentage_of_reviews}%</td>
+                                    <td className="p-3 text-center text-gray-300">{row.complaint_count}</td>
+                                    <td className="p-3 text-center">
+                                      <button
+                                        onClick={() => setShowCriticalityModal(true)}
+                                        className="text-red-400 font-bold hover:text-red-300 transition-colors cursor-pointer"
+                                        title="Click to see formula explanation"
+                                      >
+                                        {row.criticality_score}
+                                      </button>
+                                    </td>
+                                    <td className="p-3 text-center">
+                                      <button
+                                        onClick={() => setShowCriticalityModal(true)}
+                                        title="Click to see formula explanation"
+                                      >
+                                        <Badge className={`${
+                                          row.label === 'Critical' ? 'bg-red-600' :
+                                          row.label === 'Major' ? 'bg-orange-600' : 'bg-yellow-600'
+                                        } text-white text-xs cursor-pointer hover:opacity-80 transition-opacity`}>
+                                          {row.label}
+                                        </Badge>
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Analysis Method Info */}
+                      <div className="mt-6 bg-slate-900/20 rounded-lg p-4 border border-slate-700/50">
+                        <div className="text-sm text-gray-300 mb-2">
+                          <strong>Analysis Method:</strong> {analysisResults.insights.critical_user_complaints.analysis_method}
+                        </div>
+                        <div className="text-xs text-gray-400 space-y-1">
+                          <div>• <strong>Clustering:</strong> {analysisResults.insights.critical_user_complaints.clustering_method}</div>
+                          <div>• <strong>Formula:</strong> Criticality = (Complaints × Avg Severity) + (Helpful Votes × 2)</div>
+                          <div>• <strong>Thresholds:</strong> Critical &gt;75, Major &gt;35, Minor ≤35</div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : null}
               </>
             )}
 
@@ -1963,7 +2285,7 @@ export default function Home() {
         )}
 
         {/* Loading Analysis State */}
-        {activeTab === 'analysis' && isAnalyzing && (
+        {activeTab === 'analysis' && analyzing && (
           <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
             <CardContent className="text-center py-12">
               <div className="animate-spin rounded-full h-16 w-16 border-4 border-purple-600 border-t-transparent mx-auto mb-4"></div>
@@ -1976,7 +2298,7 @@ export default function Home() {
         )}
 
         {/* Empty Analysis State */}
-        {activeTab === 'analysis' && !isAnalyzing && !analysisResults && (
+        {activeTab === 'analysis' && !analyzing && !analysisResults && (
           <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
             <CardContent className="text-center py-12">
               <div className="text-6xl mb-4">🧠</div>

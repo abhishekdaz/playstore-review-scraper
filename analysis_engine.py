@@ -26,7 +26,7 @@ warnings.filterwarnings("ignore")
 try:
     import numpy as np
     import pandas as pd
-    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
     from sklearn.decomposition import LatentDirichletAllocation
     from sklearn.cluster import KMeans
     SKLEARN_AVAILABLE = True
@@ -72,6 +72,34 @@ try:
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
     logger.info("Transformers library not available - Using traditional sentiment analysis")
+
+# Enhanced pipeline imports
+try:
+    from keybert import KeyBERT
+    from sentence_transformers import SentenceTransformer
+    KEYBERT_AVAILABLE = True
+    logger.info("KeyBERT and Sentence Transformers available - Enhanced phrase extraction enabled")
+except ImportError:
+    KEYBERT_AVAILABLE = False
+    logger.warning("KeyBERT not available - Using fallback phrase extraction")
+
+try:
+    import spacy
+    from spacy.matcher import Matcher
+    SPACY_AVAILABLE = True
+    logger.info("SpaCy available - Enhanced text processing enabled")
+except ImportError:
+    SPACY_AVAILABLE = False
+    logger.warning("SpaCy not available - Using fallback text processing")
+
+try:
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.metrics.pairwise import cosine_similarity
+    CLUSTERING_AVAILABLE = True
+    logger.info("Advanced clustering algorithms available")
+except ImportError:
+    CLUSTERING_AVAILABLE = False
+    logger.warning("Advanced clustering not available")
 
 @dataclass
 class CategoryConfig:
@@ -341,6 +369,538 @@ class SentimentAnalyzer:
         
         return final_sentiment, confidence
 
+class EnhancedSentimentPipeline:
+    """
+    Advanced sentiment analysis and issue extraction pipeline
+    Uses RoBERTa for sentiment, KeyBERT for phrase extraction, SpaCy for parsing,
+    and Agglomerative Clustering for grouping similar complaints
+    """
+    
+    def __init__(self):
+        # Initialize RoBERTa sentiment model
+        self.roberta_pipeline = None
+        self.keybert_model = None
+        self.spacy_nlp = None
+        self.sentence_model = None
+        
+        # Severity patterns
+        self.severity_patterns = {
+            'critical': [
+                r'\b(crash|crashes|crashing|frozen|freeze|freezes|not working|broken|unusable|lost.*data|data.*lost)\b',
+                r'\b(can\'t.*open|won\'t.*start|completely.*broken|totally.*broken|doesn\'t.*work)\b',
+                r'\b(refund|money.*back|fraud|scam|charged.*twice|unauthorized.*charge)\b'
+            ],
+            'severe': [
+                r'\b(slow|lag|laggy|sluggish|battery.*drain|overheating|hot|very.*slow)\b',
+                r'\b(bug|bugs|error|errors|glitch|glitches|problem|problems|issue|issues)\b',
+                r'\b(annoying|frustrating|terrible|awful|hate.*it|worst.*app)\b'
+            ],
+            'minor': [
+                r'\b(could.*be.*better|minor.*issue|small.*problem|slightly.*slow)\b',
+                r'\b(would.*like|suggestion|feature.*request|improvement)\b'
+            ]
+        }
+        
+        # Domain-specific patterns
+        self.fraud_patterns = [
+            r'\b(fraud|scam|scammer|fake|steal|stolen|unauthorized|illegal)\b',
+            r'\b(suspicious.*activity|account.*hacked|identity.*theft)\b',
+            r'\b(phishing|malware|virus|security.*breach)\b'
+        ]
+        
+        self.money_patterns = [
+            r'\b(money|payment|pay|paid|charge|charged|bill|billing|refund|cost|price|expensive)\b',
+            r'\b(credit.*card|debit.*card|transaction|purchase|buy|bought|subscription)\b',
+            r'\b(\$\d+|\d+.*dollar|dollar.*\d+|free.*trial|premium|upgrade)\b'
+        ]
+        
+        self.update_patterns = [
+            r'\b(update|updated|version|new.*version|latest.*version|upgrade|upgraded)\b',
+            r'\b(after.*update|since.*update|new.*update|recent.*update)\b',
+            r'\b(broke.*after|broken.*since|worse.*after|stopped.*working.*after)\b'
+        ]
+        
+        self._initialize_models()
+    
+    def _initialize_models(self):
+        """Initialize all models for the pipeline"""
+        try:
+            # Initialize RoBERTa sentiment model
+            if TRANSFORMERS_AVAILABLE:
+                logger.info("Loading RoBERTa sentiment model...")
+                self.roberta_pipeline = pipeline(
+                    "sentiment-analysis",
+                    model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+                    device=0 if torch.cuda.is_available() else -1
+                )
+                logger.info("RoBERTa model loaded successfully")
+            
+            # Initialize KeyBERT model
+            if KEYBERT_AVAILABLE:
+                logger.info("Loading KeyBERT model...")
+                self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+                self.keybert_model = KeyBERT(model=self.sentence_model)
+                logger.info("KeyBERT model loaded successfully")
+            
+            # Initialize SpaCy model
+            if SPACY_AVAILABLE:
+                try:
+                    logger.info("Loading SpaCy English model...")
+                    self.spacy_nlp = spacy.load("en_core_web_sm")
+                    logger.info("SpaCy model loaded successfully")
+                except OSError:
+                    logger.warning("SpaCy English model not found. Install with: python -m spacy download en_core_web_sm")
+                    self.spacy_nlp = None
+        
+        except Exception as e:
+            logger.error(f"Error initializing enhanced pipeline models: {e}")
+    
+    def analyze_single_review(self, review_text: str, rating: int) -> Dict[str, Any]:
+        """
+        Comprehensive analysis of a single review
+        """
+        result = {
+            'original_text': review_text,
+            'rating': rating,
+            'sentiment': {},
+            'key_phrases': [],
+            'severity': 'minor',
+            'severity_score': 0.0,
+            'fraud_related': False,
+            'money_related': False,
+            'update_related': False,
+            'complaint_themes': []
+        }
+        
+        # 1. RoBERTa Sentiment Analysis
+        result['sentiment'] = self._analyze_sentiment_roberta(review_text)
+        
+        # 2. Extract key complaint phrases using KeyBERT
+        result['key_phrases'] = self._extract_key_phrases(review_text)
+        
+        # 3. Detect specific issue types
+        result['fraud_related'] = self._detect_fraud_issues(review_text)
+        result['money_related'] = self._detect_money_issues(review_text)
+        result['update_related'] = self._detect_update_issues(review_text)
+        
+        # 4. Classify severity
+        result['severity'], result['severity_score'] = self._classify_severity(review_text, rating)
+        
+        # 5. Extract complaint themes
+        result['complaint_themes'] = self._extract_complaint_themes(review_text)
+        
+        return result
+    
+    def _analyze_sentiment_roberta(self, text: str) -> Dict[str, Any]:
+        """Analyze sentiment using RoBERTa model"""
+        if not self.roberta_pipeline:
+            return {'sentiment': 'unknown', 'confidence': 0.0, 'available': False}
+        
+        try:
+            # Preprocess for RoBERTa
+            processed_text = re.sub(r'@\w+', '@user', text)
+            processed_text = re.sub(r'http\S+|www\S+|https\S+', 'http', processed_text)
+            
+            # Truncate if too long
+            if len(processed_text) > 400:
+                processed_text = processed_text[:400]
+            
+            result = self.roberta_pipeline(processed_text)[0]
+            
+            # Map labels
+            label_mapping = {
+                'LABEL_0': 'negative',
+                'LABEL_1': 'neutral',
+                'LABEL_2': 'positive'
+            }
+            
+            sentiment = label_mapping.get(result['label'], result['label'].lower())
+            confidence = result['score']
+            
+            return {
+                'sentiment': sentiment,
+                'confidence': confidence,
+                'available': True,
+                'model': 'roberta'
+            }
+        
+        except Exception as e:
+            logger.error(f"RoBERTa sentiment analysis failed: {e}")
+            return {'sentiment': 'unknown', 'confidence': 0.0, 'available': False, 'error': str(e)}
+    
+    def _extract_key_phrases(self, text: str) -> List[Dict[str, Any]]:
+        """Extract key complaint phrases using KeyBERT with maxsum and trigrams"""
+        if not self.keybert_model:
+            return []
+        
+        try:
+            # Extract keyphrases with different n-gram ranges
+            keyphrases = []
+            
+            # Extract unigrams, bigrams, and trigrams
+            for ngram_range in [(1, 1), (1, 2), (1, 3)]:
+                phrases = self.keybert_model.extract_keywords(
+                    text,
+                    keyphrase_ngram_range=ngram_range,
+                    stop_words='english',
+                    use_maxsum=True,  # Use MaxSum for diversity
+                    nr_candidates=20,
+                    top_k=5
+                )
+                
+                for phrase, score in phrases:
+                    # Filter out generic phrases
+                    if len(phrase) > 2 and not phrase.lower() in ['app', 'good', 'bad', 'nice']:
+                        keyphrases.append({
+                            'phrase': phrase,
+                            'relevance_score': score,
+                            'ngram_type': f"{ngram_range[0]}-{ngram_range[1]}gram"
+                        })
+            
+            # Sort by relevance and remove duplicates
+            unique_phrases = {}
+            for phrase_data in keyphrases:
+                phrase = phrase_data['phrase']
+                if phrase not in unique_phrases or phrase_data['relevance_score'] > unique_phrases[phrase]['relevance_score']:
+                    unique_phrases[phrase] = phrase_data
+            
+            result = list(unique_phrases.values())
+            result.sort(key=lambda x: x['relevance_score'], reverse=True)
+            
+            return result[:10]  # Return top 10 phrases
+        
+        except Exception as e:
+            logger.error(f"KeyBERT phrase extraction failed: {e}")
+            return []
+    
+    def _detect_fraud_issues(self, text: str) -> bool:
+        """Detect fraud-related mentions using keyword patterns"""
+        text_lower = text.lower()
+        for pattern in self.fraud_patterns:
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                return True
+        return False
+    
+    def _detect_money_issues(self, text: str) -> bool:
+        """Detect money-related mentions using keyword patterns"""
+        text_lower = text.lower()
+        for pattern in self.money_patterns:
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                return True
+        return False
+    
+    def _detect_update_issues(self, text: str) -> bool:
+        """Detect update-related issues using keyword patterns"""
+        text_lower = text.lower()
+        for pattern in self.update_patterns:
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                return True
+        return False
+    
+    def _classify_severity(self, text: str, rating: int) -> Tuple[str, float]:
+        """Classify severity based on text patterns and rating"""
+        text_lower = text.lower()
+        severity_scores = {'critical': 0, 'severe': 0, 'minor': 0}
+        
+        # Pattern matching
+        for severity, patterns in self.severity_patterns.items():
+            for pattern in patterns:
+                matches = len(re.findall(pattern, text_lower, re.IGNORECASE))
+                severity_scores[severity] += matches
+        
+        # Rating influence
+        if rating <= 2:
+            severity_scores['critical'] += 2
+            severity_scores['severe'] += 1
+        elif rating == 3:
+            severity_scores['severe'] += 1
+        
+        # Text length influence (longer complaints tend to be more severe)
+        if len(text) > 200:
+            severity_scores['severe'] += 1
+        
+        # Determine final severity
+        max_score = max(severity_scores.values())
+        if max_score == 0:
+            return 'minor', 0.1
+        
+        for severity, score in severity_scores.items():
+            if score == max_score:
+                normalized_score = min(score / 5.0, 1.0)  # Normalize to 0-1
+                return severity, normalized_score
+        
+        return 'minor', 0.1
+    
+    def _extract_complaint_themes(self, text: str) -> List[str]:
+        """Extract complaint themes using SpaCy dependency parsing"""
+        if not self.spacy_nlp:
+            # Fallback to simple keyword extraction
+            return self._fallback_theme_extraction(text)
+        
+        try:
+            doc = self.spacy_nlp(text)
+            themes = []
+            
+            # Look for negative adjectives with objects
+            for token in doc:
+                if token.pos_ == 'ADJ' and token.sentiment < 0:  # Negative adjective
+                    # Find what the adjective is describing
+                    for child in token.children:
+                        if child.pos_ in ['NOUN', 'PROPN']:
+                            themes.append(f"{token.lemma_} {child.lemma_}")
+                
+                # Look for complaint patterns: "problem with X", "issue with X"
+                if token.lemma_ in ['problem', 'issue', 'bug', 'error']:
+                    for child in token.children:
+                        if child.dep_ == 'prep' and child.lemma_ == 'with':
+                            for grandchild in child.children:
+                                if grandchild.pos_ in ['NOUN', 'PROPN']:
+                                    themes.append(f"{token.lemma_} with {grandchild.lemma_}")
+            
+            return list(set(themes))[:5]  # Return unique themes, max 5
+        
+        except Exception as e:
+            logger.error(f"SpaCy theme extraction failed: {e}")
+            return self._fallback_theme_extraction(text)
+    
+    def _fallback_theme_extraction(self, text: str) -> List[str]:
+        """Fallback theme extraction using simple patterns"""
+        themes = []
+        text_lower = text.lower()
+        
+        # Simple pattern matching for common complaint themes
+        theme_patterns = {
+            'performance': r'\b(slow|lag|performance|speed|fast|quick)\b',
+            'crashes': r'\b(crash|freeze|stuck|hang|quit)\b',
+            'interface': r'\b(ui|interface|design|layout|button|menu)\b',
+            'features': r'\b(feature|function|option|setting|tool)\b',
+            'bugs': r'\b(bug|error|glitch|problem|issue)\b',
+            'ads': r'\b(ad|ads|advertisement|banner|popup)\b',
+            'payment': r'\b(pay|payment|charge|bill|money|cost|price)\b',
+            'login': r'\b(login|log.*in|sign.*in|account|password)\b'
+        }
+        
+        for theme, pattern in theme_patterns.items():
+            if re.search(pattern, text_lower):
+                themes.append(theme)
+        
+        return themes
+    
+    def cluster_complaints(self, analyzed_reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Group similar complaints using Agglomerative Clustering
+        """
+        if not CLUSTERING_AVAILABLE or len(analyzed_reviews) < 2:
+            return self._fallback_clustering(analyzed_reviews)
+        
+        try:
+            # Extract features for clustering
+            complaint_texts = []
+            complaint_data = []
+            
+            for review in analyzed_reviews:
+                if review['sentiment'].get('sentiment') in ['negative', 'neutral'] and review['key_phrases']:
+                    # Use key phrases as feature representation
+                    phrase_text = ' '.join([phrase['phrase'] for phrase in review['key_phrases']])
+                    complaint_texts.append(phrase_text)
+                    complaint_data.append(review)
+            
+            if len(complaint_texts) < 2:
+                return self._fallback_clustering(analyzed_reviews)
+            
+            # Create embeddings using sentence transformer
+            if self.sentence_model:
+                embeddings = self.sentence_model.encode(complaint_texts)
+            else:
+                # Fallback to TF-IDF
+                from sklearn.feature_extraction.text import TfidfVectorizer
+                vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
+                embeddings = vectorizer.fit_transform(complaint_texts).toarray()
+            
+            # Determine optimal number of clusters
+            n_clusters = min(max(2, len(complaint_texts) // 5), 10)
+            
+            # Perform clustering
+            clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward')
+            cluster_labels = clustering.fit_predict(embeddings)
+            
+            # Group reviews by cluster
+            clusters = {}
+            for i, label in enumerate(cluster_labels):
+                if label not in clusters:
+                    clusters[label] = []
+                clusters[label].append(complaint_data[i])
+            
+            # Analyze each cluster
+            cluster_analysis = {}
+            for cluster_id, cluster_reviews in clusters.items():
+                cluster_analysis[f"cluster_{cluster_id}"] = self._analyze_cluster(cluster_reviews)
+            
+            return {
+                'clusters': cluster_analysis,
+                'total_clusters': len(clusters),
+                'total_complaints': len(complaint_data),
+                'clustering_method': 'agglomerative'
+            }
+        
+        except Exception as e:
+            logger.error(f"Clustering failed: {e}")
+            return self._fallback_clustering(analyzed_reviews)
+    
+    def _analyze_cluster(self, cluster_reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyze a cluster of similar reviews"""
+        if not cluster_reviews:
+            return {}
+        
+        # Extract top complaint phrases
+        phrase_counts = Counter()
+        severity_scores = []
+        money_involved = 0
+        update_related = 0
+        
+        for review in cluster_reviews:
+            # Count phrase frequencies
+            for phrase_data in review['key_phrases']:
+                phrase_counts[phrase_data['phrase']] += 1
+            
+            # Collect severity scores
+            severity_scores.append(review['severity_score'])
+            
+            # Count special flags
+            if review['money_related']:
+                money_involved += 1
+            if review['update_related']:
+                update_related += 1
+        
+        # Calculate cluster statistics
+        avg_severity = sum(severity_scores) / len(severity_scores) if severity_scores else 0
+        top_phrases = phrase_counts.most_common(5)
+        
+        # Determine dominant severity level
+        severity_counts = Counter([review['severity'] for review in cluster_reviews])
+        dominant_severity = severity_counts.most_common(1)[0][0]
+        
+        return {
+            'count': len(cluster_reviews),
+            'top_complaint_phrases': [{'phrase': phrase, 'count': count} for phrase, count in top_phrases],
+            'average_severity_score': round(avg_severity, 3),
+            'dominant_severity': dominant_severity,
+            'money_involved_count': money_involved,
+            'money_involved_percentage': round((money_involved / len(cluster_reviews)) * 100, 1),
+            'update_related_count': update_related,
+            'update_related_percentage': round((update_related / len(cluster_reviews)) * 100, 1),
+            'sample_reviews': [
+                {
+                    'text': review['original_text'][:200] + '...' if len(review['original_text']) > 200 else review['original_text'],
+                    'rating': review['rating'],
+                    'severity': review['severity']
+                }
+                for review in cluster_reviews[:3]  # Include 3 sample reviews
+            ]
+        }
+    
+    def _fallback_clustering(self, analyzed_reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Fallback clustering based on severity and themes"""
+        clusters = {'high_severity': [], 'medium_severity': [], 'low_severity': []}
+        
+        for review in analyzed_reviews:
+            if review['severity'] == 'critical':
+                clusters['high_severity'].append(review)
+            elif review['severity'] == 'severe':
+                clusters['medium_severity'].append(review)
+            else:
+                clusters['low_severity'].append(review)
+        
+        # Analyze each cluster
+        cluster_analysis = {}
+        for cluster_name, cluster_reviews in clusters.items():
+            if cluster_reviews:
+                cluster_analysis[cluster_name] = self._analyze_cluster(cluster_reviews)
+        
+        return {
+            'clusters': cluster_analysis,
+            'total_clusters': len(cluster_analysis),
+            'total_complaints': len(analyzed_reviews),
+            'clustering_method': 'severity_based_fallback'
+        }
+    
+    def process_reviews_batch(self, reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Process a batch of reviews through the complete enhanced pipeline
+        """
+        logger.info(f"Processing {len(reviews)} reviews through enhanced pipeline...")
+        
+        # Step 1: Analyze each review individually
+        analyzed_reviews = []
+        for review in reviews:
+            review_text = review.get('content', review.get('review', ''))
+            rating = review.get('rating', 3)
+            
+            if review_text.strip():
+                analysis = self.analyze_single_review(review_text, rating)
+                analyzed_reviews.append(analysis)
+        
+        # Step 2: Cluster similar complaints
+        clustering_result = self.cluster_complaints(analyzed_reviews)
+        
+        # Step 3: Generate summary statistics
+        summary = self._generate_pipeline_summary(analyzed_reviews, clustering_result)
+        
+        return {
+            'individual_analyses': analyzed_reviews,
+            'clustering': clustering_result,
+            'summary': summary,
+            'total_processed': len(analyzed_reviews)
+        }
+    
+    def _generate_pipeline_summary(self, analyzed_reviews: List[Dict[str, Any]], clustering_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate summary statistics for the enhanced pipeline"""
+        if not analyzed_reviews:
+            return {}
+        
+        # Sentiment distribution
+        sentiment_counts = Counter([review['sentiment'].get('sentiment', 'unknown') for review in analyzed_reviews])
+        
+        # Severity distribution
+        severity_counts = Counter([review['severity'] for review in analyzed_reviews])
+        
+        # Issue type distribution
+        fraud_count = sum(1 for review in analyzed_reviews if review['fraud_related'])
+        money_count = sum(1 for review in analyzed_reviews if review['money_related'])
+        update_count = sum(1 for review in analyzed_reviews if review['update_related'])
+        
+        # Top complaint phrases across all reviews
+        all_phrases = Counter()
+        for review in analyzed_reviews:
+            for phrase_data in review['key_phrases']:
+                all_phrases[phrase_data['phrase']] += 1
+        
+        total = len(analyzed_reviews)
+        
+        return {
+            'sentiment_distribution': {
+                sentiment: {'count': count, 'percentage': round((count / total) * 100, 1)}
+                for sentiment, count in sentiment_counts.items()
+            },
+            'severity_distribution': {
+                severity: {'count': count, 'percentage': round((count / total) * 100, 1)}
+                for severity, count in severity_counts.items()
+            },
+            'issue_types': {
+                'fraud_related': {'count': fraud_count, 'percentage': round((fraud_count / total) * 100, 1)},
+                'money_related': {'count': money_count, 'percentage': round((money_count / total) * 100, 1)},
+                'update_related': {'count': update_count, 'percentage': round((update_count / total) * 100, 1)}
+            },
+            'top_complaint_phrases': [
+                {'phrase': phrase, 'count': count, 'percentage': round((count / total) * 100, 1)}
+                for phrase, count in all_phrases.most_common(10)
+            ],
+            'clusters_found': clustering_result.get('total_clusters', 0),
+            'average_confidence': round(
+                sum(review['sentiment'].get('confidence', 0) for review in analyzed_reviews) / total, 3
+            ) if total > 0 else 0
+        }
+
 class TextProcessor:
     """Handles text preprocessing and tokenization"""
     
@@ -489,6 +1049,9 @@ class ReviewAnalysisEngine:
         
         # Initialize sentiment analyzer
         self.sentiment_analyzer = SentimentAnalyzer()
+        
+        # Initialize enhanced sentiment pipeline
+        self.enhanced_pipeline = EnhancedSentimentPipeline()
         
         # Initialize text processor
         self.text_processor = TextProcessor(self.stop_words)
@@ -1059,6 +1622,50 @@ class ReviewAnalysisEngine:
         # Generate Critical Negative Themes (most reliable data)
         insights['critical_themes'] = self._extract_critical_negative_themes(analysis_results)
         
+        # Calculate combined tech issues metrics
+        tech_related_themes = ['Crashes & Bugs', 'Performance Issues', 'Login & Account Problems']
+        tech_issues_count = 0
+        tech_issues_percentage = 0.0
+        
+        for theme in insights['critical_themes']:
+            if theme['theme_name'] in tech_related_themes:
+                tech_issues_count += theme['review_count']
+                tech_issues_percentage += theme['percentage']
+        
+        insights['tech_issues_summary'] = {
+            'total_count': tech_issues_count,
+            'total_percentage': round(tech_issues_percentage, 1),
+            'theme_count': len([t for t in insights['critical_themes'] if t['theme_name'] in tech_related_themes])
+        }
+        
+        # Generate comprehensive complaint cluster analysis
+        if 'reviews' in analysis_results:
+            insights['complaint_clusters'] = self.analyze_complaint_clusters(analysis_results['reviews'])
+        
+        # Add comprehensive negative review cluster analysis (new 6-step process)
+        try:
+            logger.info("Performing comprehensive 6-step negative review cluster analysis...")
+            negative_cluster_analysis = self.analyze_negative_review_clusters(analysis_results.get('reviews', []))
+            insights['negative_cluster_analysis'] = negative_cluster_analysis
+        except Exception as e:
+            logger.warning(f"Negative cluster analysis failed: {e}")
+            insights['negative_cluster_analysis'] = {
+                "total_negative_reviews": 0,
+                "cluster_summary": []
+            }
+        
+        # Add critical user complaints analysis (improved criticality scoring)
+        try:
+            logger.info("Performing critical user complaints analysis with improved scoring...")
+            critical_complaints_analysis = self.analyze_critical_user_complaints(analysis_results.get('reviews', []))
+            insights['critical_user_complaints'] = critical_complaints_analysis
+        except Exception as e:
+            logger.warning(f"Critical user complaints analysis failed: {e}")
+            insights['critical_user_complaints'] = {
+                "total_negative_reviews": 0,
+                "critical_issues": []
+            }
+        
         return insights
 
     def _get_severity_level(self, score: float) -> str:
@@ -1333,6 +1940,7 @@ class ReviewAnalysisEngine:
         """
         Extract critical themes from negative reviews only (most reliable data)
         Focuses on 1-3 star reviews to avoid paid review contamination
+        Enhanced with cluster complaint phrases and frequency data
         """
         critical_themes = []
         
@@ -1416,6 +2024,7 @@ class ReviewAnalysisEngine:
         for theme_name, theme_data in problem_themes.items():
             matching_reviews = []
             found_phrases = []
+            phrase_frequencies = {}
             
             for review in negative_reviews:
                 review_text = review.get('review', '').lower()
@@ -1425,8 +2034,12 @@ class ReviewAnalysisEngine:
                 # Check for keyword matches
                 keyword_matches = [kw for kw in theme_data['keywords'] if kw in review_text]
                 
-                # Check for specific problematic phrases
-                phrase_matches = [phrase for phrase in theme_data['problematic_phrases'] if phrase in review_text]
+                # Check for specific problematic phrases with frequency counting
+                phrase_matches = []
+                for phrase in theme_data['problematic_phrases']:
+                    if phrase in review_text:
+                        phrase_matches.append(phrase)
+                        phrase_frequencies[phrase] = phrase_frequencies.get(phrase, 0) + 1
                 
                 if keyword_matches or phrase_matches:
                     matching_reviews.append(review)
@@ -1449,8 +2062,28 @@ class ReviewAnalysisEngine:
                 else:
                     severity = 'Low'
                 
-                # Get unique phrases and keywords
+                # Get unique phrases and keywords with their frequencies
                 unique_phrases = list(set(found_phrases))[:10]  # Top 10 unique phrases
+                
+                # Create phrase frequency list with severity scores
+                frequent_complaints = []
+                for phrase, count in sorted(phrase_frequencies.items(), key=lambda x: x[1], reverse=True)[:5]:
+                    # Calculate average severity for this phrase
+                    phrase_severities = []
+                    for review in matching_reviews:
+                        review_text = review.get('review', '').lower()
+                        if phrase in review_text:
+                            # Use rating as inverse severity (1 star = high severity)
+                            severity_score = (6 - review.get('rating', 3)) / 5.0  # Convert to 0-1 scale
+                            phrase_severities.append(severity_score)
+                    
+                    avg_severity = sum(phrase_severities) / len(phrase_severities) if phrase_severities else 0.5
+                    
+                    frequent_complaints.append({
+                        "phrase": phrase,
+                        "frequency": count,
+                        "avg_severity": round(avg_severity, 2)
+                    })
                 
                 critical_themes.append({
                     'theme_name': theme_name,
@@ -1458,7 +2091,9 @@ class ReviewAnalysisEngine:
                     'review_count': len(matching_reviews),
                     'percentage': round(frequency_percentage, 1),
                     'severity': severity,
-                    'problematic_phrases': unique_phrases
+                    'problematic_phrases': unique_phrases,
+                    'frequent_complaints': frequent_complaints,  # New field with frequency data
+                    'scoring_formula': 'frequency × avg_severity (descending)'  # Show formula
                 })
         
         # Sort by severity and frequency
@@ -2416,5 +3051,1326 @@ class ReviewAnalysisEngine:
             return "Medium"
         else:
             return "Low"
+    
+    def extract_cluster_issue_phrases(self, negative_reviews: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Extract high-quality issue phrases from clustered negative reviews.
+        
+        Args:
+            negative_reviews: List of review dicts with 'content', 'sentiment', and 'cluster' keys
+            
+        Returns:
+            List of cluster analysis dicts with top issue phrases
+        """
+        if not SKLEARN_AVAILABLE:
+            logger.warning("Scikit-learn not available - using fallback phrase extraction")
+            return self._fallback_cluster_phrase_extraction(negative_reviews)
+        
+        try:
+            from sklearn.feature_extraction.text import CountVectorizer
+            import re
+            
+            # Group reviews by cluster
+            clusters = defaultdict(list)
+            for review in negative_reviews:
+                cluster_id = review.get('cluster', 0)
+                clusters[cluster_id].append(review)
+            
+            cluster_results = []
+            
+            for cluster_id, cluster_reviews in clusters.items():
+                if not cluster_reviews:
+                    continue
+                
+                logger.info(f"Processing cluster {cluster_id} with {len(cluster_reviews)} reviews")
+                
+                # Step 1: Preprocess reviews - extract content and clean
+                texts = []
+                review_sentiments = []
+                
+                for review in cluster_reviews:
+                    content = review.get('content', '')
+                    if content:
+                        # Basic preprocessing - lowercase and basic cleaning
+                        cleaned_content = content.lower().strip()
+                        texts.append(cleaned_content)
+                        
+                        # Extract sentiment score
+                        sentiment = review.get('sentiment', {})
+                        if isinstance(sentiment, dict):
+                            sentiment_score = abs(sentiment.get('score', 0.5))  # Use absolute value for severity
+                        else:
+                            sentiment_score = 0.5  # Default moderate severity
+                        review_sentiments.append(sentiment_score)
+                
+                if not texts:
+                    continue
+                
+                # Step 2: Use CountVectorizer to extract top phrases
+                try:
+                    vectorizer = CountVectorizer(
+                        ngram_range=(2, 4),
+                        stop_words='english',
+                        min_df=1,
+                        max_df=0.9,
+                        lowercase=True,
+                        token_pattern=r'\b[a-zA-Z]{2,}\b'  # Only alphabetic tokens, min 2 chars
+                    )
+                    
+                    # Fit and transform the texts
+                    count_matrix = vectorizer.fit_transform(texts)
+                    feature_names = vectorizer.get_feature_names_out()
+                    
+                    # Get phrase frequencies
+                    phrase_frequencies = count_matrix.sum(axis=0).A1
+                    
+                    # Step 3: Calculate metrics for each phrase
+                    phrase_metrics = []
+                    
+                    for idx, phrase in enumerate(feature_names):
+                        frequency = int(phrase_frequencies[idx])
+                        if frequency == 0:
+                            continue
+                        
+                        # Find reviews containing this phrase and calculate average sentiment
+                        matching_reviews = []
+                        phrase_sentiments = []
+                        
+                        for i, text in enumerate(texts):
+                            if phrase in text:
+                                matching_reviews.append(i)
+                                phrase_sentiments.append(review_sentiments[i])
+                        
+                        if phrase_sentiments:
+                            avg_severity = sum(phrase_sentiments) / len(phrase_sentiments)
+                            
+                            # Calculate combined score (frequency × severity)
+                            combined_score = frequency * avg_severity
+                            
+                            phrase_metrics.append({
+                                "phrase": phrase,
+                                "frequency": frequency,
+                                "avg_severity": round(avg_severity, 3),
+                                "combined_score": round(combined_score, 3)
+                            })
+                    
+                    # Step 4 & 5: Sort by combined score and get top 5
+                    phrase_metrics.sort(key=lambda x: x['combined_score'], reverse=True)
+                    top_phrases = phrase_metrics[:5]
+                    
+                    cluster_results.append({
+                        "cluster": int(cluster_id),
+                        "review_count": len(cluster_reviews),
+                        "phrases": top_phrases
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"CountVectorizer failed for cluster {cluster_id}: {e}")
+                    # Fallback to simple phrase extraction for this cluster
+                    fallback_phrases = self._simple_phrase_extraction(texts, review_sentiments)
+                    cluster_results.append({
+                        "cluster": int(cluster_id),
+                        "review_count": len(cluster_reviews),
+                        "phrases": fallback_phrases[:5]
+                    })
+            
+            # Sort clusters by review count (largest first)
+            cluster_results.sort(key=lambda x: x['review_count'], reverse=True)
+            
+            logger.info(f"Successfully extracted phrases from {len(cluster_results)} clusters")
+            return cluster_results
+            
+        except Exception as e:
+            logger.error(f"Cluster phrase extraction failed: {e}")
+            return self._fallback_cluster_phrase_extraction(negative_reviews)
+    
+    def _simple_phrase_extraction(self, texts: List[str], sentiments: List[float]) -> List[Dict[str, Any]]:
+        """Simple fallback phrase extraction using basic n-gram counting"""
+        from collections import Counter
+        import re
+        
+        # Simple n-gram extraction
+        phrases = []
+        for text in texts:
+            # Remove punctuation and split into words
+            words = re.findall(r'\b[a-zA-Z]{2,}\b', text.lower())
+            
+            # Generate 2-4 grams
+            for n in range(2, 5):
+                for i in range(len(words) - n + 1):
+                    phrase = ' '.join(words[i:i+n])
+                    phrases.append(phrase)
+        
+        # Count phrase frequencies
+        phrase_counts = Counter(phrases)
+        
+        # Calculate metrics
+        phrase_metrics = []
+        for phrase, frequency in phrase_counts.most_common(20):  # Top 20 to filter from
+            # Find matching reviews
+            matching_sentiments = []
+            for i, text in enumerate(texts):
+                if phrase in text.lower():
+                    matching_sentiments.append(sentiments[i])
+            
+            if matching_sentiments and frequency >= 1:
+                avg_severity = sum(matching_sentiments) / len(matching_sentiments)
+                combined_score = frequency * avg_severity
+                
+                phrase_metrics.append({
+                    "phrase": phrase,
+                    "frequency": frequency,
+                    "avg_severity": round(avg_severity, 3),
+                    "combined_score": round(combined_score, 3)
+                })
+        
+        # Sort by combined score
+        phrase_metrics.sort(key=lambda x: x['combined_score'], reverse=True)
+        return phrase_metrics
+    
+    def _fallback_cluster_phrase_extraction(self, negative_reviews: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fallback phrase extraction when scikit-learn is not available"""
+        try:
+            # Group by cluster
+            clusters = defaultdict(list)
+            for review in negative_reviews:
+                cluster_id = review.get('cluster', 0)
+                clusters[cluster_id].append(review)
+            
+            cluster_results = []
+            
+            for cluster_id, cluster_reviews in clusters.items():
+                texts = []
+                sentiments = []
+                
+                for review in cluster_reviews:
+                    content = review.get('content', '')
+                    if content:
+                        texts.append(content.lower())
+                        
+                        sentiment = review.get('sentiment', {})
+                        if isinstance(sentiment, dict):
+                            sentiment_score = abs(sentiment.get('score', 0.5))
+                        else:
+                            sentiment_score = 0.5
+                        sentiments.append(sentiment_score)
+                
+                if texts:
+                    phrases = self._simple_phrase_extraction(texts, sentiments)
+                    cluster_results.append({
+                        "cluster": int(cluster_id),
+                        "review_count": len(cluster_reviews),
+                        "phrases": phrases[:5]
+                    })
+            
+            cluster_results.sort(key=lambda x: x['review_count'], reverse=True)
+            return cluster_results
+            
+        except Exception as e:
+            logger.error(f"Fallback cluster phrase extraction failed: {e}")
+            return []
+
+    def analyze_complaint_clusters(self, reviews_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Comprehensive complaint clustering and analysis following structured approach
+        
+        Steps:
+        1. Filter negative reviews (score <= 2, NEGATIVE sentiment)
+        2. Cluster complaints using sentence transformers
+        3. Extract meaningful phrases per cluster
+        4. Compute criticality scores
+        5. Build structured output
+        6. Return UI-ready data
+        """
+        try:
+            # Step 1: Preprocessing
+            print("Step 1: Preprocessing negative reviews...")
+            negative_reviews = []
+            
+            for review in reviews_data:
+                # Filter by score and sentiment
+                score = review.get('score', 5)
+                sentiment = review.get('sentiment', {})
+                sentiment_label = sentiment.get('label', 'NEUTRAL')
+                
+                if score <= 2 and sentiment_label.lower() == 'negative':
+                    # Default thumbsUpCount if missing
+                    if 'thumbsUpCount' not in review or review['thumbsUpCount'] is None:
+                        review['thumbsUpCount'] = 1
+                    negative_reviews.append(review)
+            
+            total_negative_reviews = len(negative_reviews)
+            print(f"Total negative reviews filtered: {total_negative_reviews}")
+            
+            if total_negative_reviews < 5:
+                return {
+                    'total_negative_reviews': total_negative_reviews,
+                    'cluster_summary': [],
+                    'message': 'Insufficient negative reviews for clustering analysis'
+                }
+            
+            # Step 2: Cluster the complaints
+            print("Step 2: Clustering complaints...")
+            review_texts = [review['content'] for review in negative_reviews]
+            
+            # Use sentence transformers for embedding
+            if hasattr(self, 'sentence_model') and self.sentence_model:
+                embeddings = self.sentence_model.encode(review_texts)
+                
+                # Use AgglomerativeClustering with distance threshold
+                from sklearn.cluster import AgglomerativeClustering
+                clustering = AgglomerativeClustering(
+                    distance_threshold=1.0,
+                    n_clusters=None,
+                    linkage='ward'
+                )
+                cluster_labels = clustering.fit_predict(embeddings)
+            else:
+                # Fallback to simple clustering if sentence transformers not available
+                from sklearn.feature_extraction.text import TfidfVectorizer
+                from sklearn.cluster import KMeans
+                
+                vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+                tfidf_matrix = vectorizer.fit_transform(review_texts)
+                
+                # Use KMeans with automatic cluster number estimation
+                n_clusters = min(10, max(2, total_negative_reviews // 20))
+                clustering = KMeans(n_clusters=n_clusters, random_state=42)
+                cluster_labels = clustering.fit_predict(tfidf_matrix)
+            
+            # Assign cluster IDs to reviews
+            clustered_reviews = []
+            for i, review in enumerate(negative_reviews):
+                review['cluster_id'] = int(cluster_labels[i])
+                clustered_reviews.append(review)
+            
+            print(f"Created {len(set(cluster_labels))} clusters")
+            
+            # Step 3: Extract meaningful complaint phrases for each cluster
+            print("Step 3: Extracting complaint phrases...")
+            cluster_data = {}
+            
+            for cluster_id in set(cluster_labels):
+                cluster_reviews = [r for r in clustered_reviews if r['cluster_id'] == cluster_id]
+                cluster_texts = [r['content'] for r in cluster_reviews]
+                
+                # Extract phrases using CountVectorizer
+                from sklearn.feature_extraction.text import CountVectorizer
+                vectorizer = CountVectorizer(
+                    ngram_range=(2, 4),
+                    stop_words='english',
+                    max_features=50
+                )
+                
+                try:
+                    phrase_matrix = vectorizer.fit_transform(cluster_texts)
+                    feature_names = vectorizer.get_feature_names_out()
+                    phrase_counts = phrase_matrix.sum(axis=0).A1
+                    
+                    # Calculate phrase metrics
+                    phrase_data = []
+                    for i, phrase in enumerate(feature_names):
+                        frequency = int(phrase_counts[i])
+                        
+                        # Calculate average severity for reviews containing this phrase
+                        phrase_reviews = [r for r in cluster_reviews if phrase.lower() in r['content'].lower()]
+                        if phrase_reviews:
+                            avg_severity = sum(r['sentiment']['score'] for r in phrase_reviews) / len(phrase_reviews)
+                            phrase_data.append({
+                                'phrase': phrase,
+                                'frequency': frequency,
+                                'avg_severity': round(avg_severity, 3)
+                            })
+                    
+                    # Sort by frequency × avg_severity and keep top 5
+                    phrase_data.sort(key=lambda x: x['frequency'] * x['avg_severity'], reverse=True)
+                    top_phrases = phrase_data[:5]
+                    
+                except Exception as e:
+                    print(f"Error extracting phrases for cluster {cluster_id}: {e}")
+                    top_phrases = []
+                
+                cluster_data[cluster_id] = {
+                    'reviews': cluster_reviews,
+                    'phrases': top_phrases
+                }
+            
+            # Step 4: Compute Criticality Score per cluster
+            print("Step 4: Computing criticality scores...")
+            cluster_summary = []
+            
+            for cluster_id, data in cluster_data.items():
+                reviews = data['reviews']
+                review_count = len(reviews)
+                percent_of_total = round((review_count / total_negative_reviews) * 100, 1)
+                
+                # Calculate averages
+                avg_severity = sum(r['sentiment']['score'] for r in reviews) / review_count
+                avg_votes = sum(r['thumbsUpCount'] for r in reviews) / review_count
+                
+                # Criticality Score = percent_of_total × avg_severity × avg_votes
+                criticality_score = round(percent_of_total * avg_severity * avg_votes, 2)
+                
+                # Get representative reviews (top 2 by thumbsUpCount)
+                representative_reviews = sorted(reviews, key=lambda x: x['thumbsUpCount'], reverse=True)[:2]
+                
+                cluster_info = {
+                    'Cluster ID': cluster_id,
+                    'Review Count': review_count,
+                    'Percent of Total': percent_of_total,
+                    'Avg Severity': round(avg_severity, 2),
+                    'Avg Helpful Votes': round(avg_votes, 1),
+                    'Criticality Score': criticality_score,
+                    'Top Complaint Phrases': data['phrases'],
+                    'Representative Reviews': [
+                        {
+                            'text': r['content'][:150] + '...' if len(r['content']) > 150 else r['content'],
+                            'thumbsUpCount': r['thumbsUpCount']
+                        }
+                        for r in representative_reviews
+                    ]
+                }
+                
+                cluster_summary.append(cluster_info)
+            
+            # Step 5: Sort by Criticality Score descending
+            cluster_summary.sort(key=lambda x: x['Criticality Score'], reverse=True)
+            
+            print(f"Step 5: Generated {len(cluster_summary)} cluster summaries")
+            
+            # Step 6: Return structured output
+            return {
+                'total_negative_reviews': total_negative_reviews,
+                'cluster_summary': cluster_summary,
+                'ui_simplification_notes': [
+                    'Merge Critical Themes + Actual User Complaints into one section',
+                    'Show Review Count of X / Y inside each cluster card',
+                    'Highlight top 2 phrases in user-friendly sentence',
+                    'Move representative reviews directly under each problem cluster',
+                    'Remove standalone Most Voted Reviews section if shown per cluster',
+                    'Add Impact fields (retention drop, revenue loss) if mapped later'
+                ]
+            }
+            
+        except Exception as e:
+            print(f"Error in complaint cluster analysis: {e}")
+            return {
+                'total_negative_reviews': 0,
+                'cluster_summary': [],
+                'error': str(e)
+            }
+
+    def extract_cluster_complaint_phrases(self, negative_reviews: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Extract complaint phrases from clustered negative reviews with simplified output format.
+        
+        Args:
+            negative_reviews: List of review dicts with 'content', 'sentiment', and 'cluster' keys
+            
+        Returns:
+            Dict mapping cluster IDs to lists of phrase objects with format:
+            {
+                2: [
+                    {"phrase": "paid but not credited", "frequency": 12, "avg_severity": 0.91},
+                    {"phrase": "refund not received", "frequency": 9, "avg_severity": 0.89}
+                ]
+            }
+        """
+        try:
+            logger.info(f"Extracting complaint phrases from {len(negative_reviews)} clustered negative reviews")
+            
+            # Group reviews by cluster
+            clusters = defaultdict(list)
+            for review in negative_reviews:
+                cluster_id = review.get('cluster', 0)
+                clusters[cluster_id].append(review)
+            
+            result = {}
+            
+            for cluster_id, cluster_reviews in clusters.items():
+                if not cluster_reviews:
+                    continue
+                
+                logger.info(f"Processing cluster {cluster_id} with {len(cluster_reviews)} reviews")
+                
+                # Step 1: Preprocess reviews - extract and clean content
+                texts = []
+                review_sentiments = []
+                
+                for review in cluster_reviews:
+                    content = review.get('content', '')
+                    if content:
+                        # Lowercase and basic cleaning
+                        cleaned_content = content.lower().strip()
+                        texts.append(cleaned_content)
+                        
+                        # Extract sentiment score (severity)
+                        sentiment = review.get('sentiment', {})
+                        if isinstance(sentiment, dict):
+                            sentiment_score = abs(sentiment.get('score', 0.5))
+                        else:
+                            sentiment_score = 0.5
+                        review_sentiments.append(sentiment_score)
+                
+                if not texts:
+                    result[int(cluster_id)] = []
+                    continue
+                
+                # Step 2: Use CountVectorizer to extract n-gram phrases
+                try:
+                    vectorizer = CountVectorizer(
+                        ngram_range=(2, 4),
+                        stop_words='english',
+                        lowercase=True,
+                        token_pattern=r'\b[a-zA-Z]{2,}\b'  # Only alphabetic tokens
+                    )
+                    
+                    # Fit and transform
+                    count_matrix = vectorizer.fit_transform(texts)
+                    feature_names = vectorizer.get_feature_names_out()
+                    
+                    # Get phrase frequencies across all texts
+                    phrase_frequencies = count_matrix.sum(axis=0).A1
+                    
+                    # Step 3: Calculate metrics for each phrase
+                    phrase_metrics = []
+                    
+                    for idx, phrase in enumerate(feature_names):
+                        frequency = int(phrase_frequencies[idx])
+                        if frequency == 0:
+                            continue
+                        
+                        # Find reviews containing this phrase and calculate average sentiment
+                        phrase_sentiments = []
+                        
+                        for i, text in enumerate(texts):
+                            if phrase in text:
+                                phrase_sentiments.append(review_sentiments[i])
+                        
+                        if phrase_sentiments:
+                            avg_severity = sum(phrase_sentiments) / len(phrase_sentiments)
+                            
+                            phrase_metrics.append({
+                                "phrase": phrase,
+                                "frequency": frequency,
+                                "avg_severity": round(avg_severity, 2),
+                                "combined_score": frequency * avg_severity
+                            })
+                    
+                    # Step 4: Sort by (frequency × avg_severity) and get top 5
+                    phrase_metrics.sort(key=lambda x: x['combined_score'], reverse=True)
+                    top_phrases = phrase_metrics[:5]
+                    
+                    # Remove combined_score from final output
+                    final_phrases = []
+                    for phrase in top_phrases:
+                        final_phrases.append({
+                            "phrase": phrase["phrase"],
+                            "frequency": phrase["frequency"],
+                            "avg_severity": phrase["avg_severity"]
+                        })
+                    
+                    result[int(cluster_id)] = final_phrases
+                    
+                except Exception as e:
+                    logger.warning(f"CountVectorizer failed for cluster {cluster_id}: {e}")
+                    # Fallback to simple extraction
+                    fallback_phrases = self._simple_phrase_extraction_dict_format(texts, review_sentiments)
+                    result[int(cluster_id)] = fallback_phrases[:5]
+            
+            logger.info(f"Successfully extracted phrases from {len(result)} clusters")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Cluster complaint phrase extraction failed: {e}")
+            return {}
+    
+    def _simple_phrase_extraction_dict_format(self, texts: List[str], sentiments: List[float]) -> List[Dict[str, Any]]:
+        """Simple fallback phrase extraction returning dict format"""
+        from collections import Counter
+        import re
+        
+        # Simple n-gram extraction
+        phrases = []
+        for text in texts:
+            # Remove punctuation and split into words
+            words = re.findall(r'\b[a-zA-Z]{2,}\b', text.lower())
+            
+            # Generate 2-4 grams
+            for n in range(2, 5):
+                for i in range(len(words) - n + 1):
+                    phrase = ' '.join(words[i:i+n])
+                    phrases.append(phrase)
+        
+        # Count phrase frequencies
+        phrase_counts = Counter(phrases)
+        
+        # Calculate metrics
+        phrase_metrics = []
+        for phrase, frequency in phrase_counts.most_common(20):
+            # Find matching reviews
+            matching_sentiments = []
+            for i, text in enumerate(texts):
+                if phrase in text.lower():
+                    matching_sentiments.append(sentiments[i])
+            
+            if matching_sentiments and frequency >= 1:
+                avg_severity = sum(matching_sentiments) / len(matching_sentiments)
+                combined_score = frequency * avg_severity
+                
+                phrase_metrics.append({
+                    "phrase": phrase,
+                    "frequency": frequency,
+                    "avg_severity": round(avg_severity, 2),
+                    "combined_score": combined_score
+                })
+        
+        # Sort by combined score and return without combined_score
+        phrase_metrics.sort(key=lambda x: x['combined_score'], reverse=True)
+        return [{
+            "phrase": p["phrase"],
+            "frequency": p["frequency"],
+            "avg_severity": p["avg_severity"]
+        } for p in phrase_metrics]
+
+    def analyze_negative_review_clusters(self, reviews):
+        """
+        Comprehensive clustering analysis for negative reviews with exact user specifications:
+        - Calculate percentages of clustered reviews (not all negative reviews)
+        - Extract top 3 complaint phrases using CountVectorizer (2-4 ngrams)
+        - Sort phrases by frequency × avg severity
+        - Identify most helpful complaint per cluster
+        - Return coverage sentence and cluster summaries
+        """
+        try:
+            logger.info("🟣 Step 1: Filter & Prepare negative reviews")
+            
+            # Filter only reviews where score <= 2 and sentiment.label == "NEGATIVE"
+            negative_reviews = []
+            for review in reviews:
+                # Handle different rating field names
+                score = review.get('score', review.get('rating', 5))
+                sentiment = review.get('sentiment_analysis', {})
+                sentiment_label = sentiment.get('final_sentiment', '').upper()
+                
+                if score <= 2 and sentiment_label.lower() == 'negative':
+                    # Ensure thumbsUpCount is set
+                    if 'thumbsUpCount' not in review or review['thumbsUpCount'] is None:
+                        review['thumbsUpCount'] = 1
+                    negative_reviews.append(review)
+            
+            total_negative_reviews = len(negative_reviews)
+            logger.info(f"Filtered {total_negative_reviews} negative reviews")
+            
+            if total_negative_reviews < 3:
+                return {
+                    "total_negative_reviews": total_negative_reviews,
+                    "total_clustered_reviews": 0,
+                    "coverage_percentage": 0.0,
+                    "coverage_sentence": f"Showing AI clusters from 0 of {total_negative_reviews} negative reviews (0% coverage)",
+                    "cluster_summary": []
+                }
+            
+            logger.info("🧠 Step 2: Cluster Reviews")
+            
+            # Prepare content for clustering
+            review_contents = [review.get('review', '') for review in negative_reviews]
+            
+            try:
+                # Try sentence transformers clustering first
+                from sentence_transformers import SentenceTransformer
+                from sklearn.cluster import AgglomerativeClustering
+                import numpy as np
+                
+                model = SentenceTransformer('all-MiniLM-L6-v2')
+                embeddings = model.encode(review_contents)
+                
+                # Use AgglomerativeClustering with distance_threshold=1.0
+                clustering = AgglomerativeClustering(
+                    distance_threshold=1.0,
+                    n_clusters=None,
+                    linkage='ward'
+                )
+                cluster_labels = clustering.fit_predict(embeddings)
+                
+            except Exception as e:
+                logger.warning(f"Sentence transformers clustering failed: {e}, using TF-IDF fallback")
+                # Fallback to TF-IDF clustering
+                from sklearn.feature_extraction.text import TfidfVectorizer
+                from sklearn.cluster import KMeans
+                
+                vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
+                tfidf_matrix = vectorizer.fit_transform(review_contents)
+                
+                # Use fewer clusters for smaller datasets
+                n_clusters = min(5, max(2, total_negative_reviews // 10))
+                kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+                cluster_labels = kmeans.fit_predict(tfidf_matrix)
+            
+            # Assign cluster_id to each review
+            for i, review in enumerate(negative_reviews):
+                review['cluster_id'] = int(cluster_labels[i])
+            
+            # Group reviews by cluster
+            clusters = {}
+            for review in negative_reviews:
+                cluster_id = review['cluster_id']
+                if cluster_id not in clusters:
+                    clusters[cluster_id] = []
+                clusters[cluster_id].append(review)
+            
+            logger.info(f"Created {len(clusters)} clusters")
+            
+            logger.info("🗣 Step 3: Extract Top Complaint Phrases per Cluster")
+            
+            cluster_summary = []
+            total_clustered_reviews = len(negative_reviews)
+            
+            for cluster_id, cluster_reviews in clusters.items():
+                if len(cluster_reviews) < 2:  # Skip tiny clusters
+                    continue
+                
+                # Extract complaint phrases using CountVectorizer
+                cluster_contents = [review.get('review', '') for review in cluster_reviews]
+                
+                try:
+                    from sklearn.feature_extraction.text import CountVectorizer
+                    
+                    vectorizer = CountVectorizer(
+                        ngram_range=(2, 4),
+                        stop_words='english',
+                        max_features=50,
+                        min_df=1
+                    )
+                    
+                    count_matrix = vectorizer.fit_transform(cluster_contents)
+                    feature_names = vectorizer.get_feature_names_out()
+                    
+                    # Calculate phrase frequencies and scores
+                    phrase_scores = []
+                    for i, phrase in enumerate(feature_names):
+                        # Get frequency (number of reviews containing this phrase)
+                        frequency = (count_matrix[:, i] > 0).sum()
+                        
+                        # Calculate average severity for reviews containing this phrase
+                        phrase_severities = []
+                        for j, review in enumerate(cluster_reviews):
+                            if count_matrix[j, i] > 0:
+                                severity = abs(review.get('sentiment_analysis', {}).get('confidence', 0.5))
+                                phrase_severities.append(severity)
+                        
+                        avg_severity = np.mean(phrase_severities) if phrase_severities else 0.5
+                        combined_score = frequency * avg_severity
+                        
+                        phrase_scores.append({
+                            "phrase": phrase,
+                            "frequency": int(frequency),
+                            "avg_severity": round(float(avg_severity), 3),
+                            "combined_score": round(float(combined_score), 3)
+                        })
+                    
+                    # Sort by combined score and take top 3
+                    top_phrases = sorted(phrase_scores, key=lambda x: x['combined_score'], reverse=True)[:3]
+                    
+                except Exception as e:
+                    logger.warning(f"Phrase extraction failed for cluster {cluster_id}: {e}")
+                    top_phrases = []
+                
+                logger.info("📊 Step 4: Compute Theme Metrics")
+                
+                # Calculate cluster metrics
+                review_count = len(cluster_reviews)
+                percent_of_clustered = (review_count / total_clustered_reviews * 100) if total_clustered_reviews > 0 else 0
+                
+                # Calculate average severity
+                severities = []
+                for review in cluster_reviews:
+                    severity = abs(review.get('sentiment_analysis', {}).get('confidence', 0.5))
+                    severities.append(severity)
+                avg_severity = np.mean(severities) if severities else 0.5
+                
+                # Calculate helpful votes metrics
+                helpful_votes = [review.get('thumbsUpCount', 1) for review in cluster_reviews]
+                total_helpful_votes = sum(helpful_votes)
+                avg_helpful_votes = np.mean(helpful_votes) if helpful_votes else 1.0
+                
+                # Calculate criticality score: Percent × Avg Severity × Avg Helpful Votes
+                criticality_score = percent_of_clustered * avg_severity * avg_helpful_votes
+                
+                # Determine concern level
+                if total_helpful_votes > (review_count * 1.5):
+                    concern_level = "High"
+                elif total_helpful_votes > (review_count * 1.0):
+                    concern_level = "Medium"
+                else:
+                    concern_level = "Low"
+                
+                logger.info("⭐️ Step 5: Identify the Most Helpful Complaint")
+                
+                # Find most helpful complaint
+                most_helpful_review = max(cluster_reviews, key=lambda x: x.get('thumbsUpCount', 1))
+                most_helpful_complaint = {
+                    "text": most_helpful_review.get('review', ''),
+                    "thumbsUpCount": most_helpful_review.get('thumbsUpCount', 1),
+                    "date": most_helpful_review.get('date', '2025-01-11')
+                }
+                
+                # Generate cluster label based on top complaint phrases
+                if top_phrases:
+                    first_phrase = top_phrases[0]['phrase']
+                    if any(word in first_phrase.lower() for word in ['crash', 'bug', 'error', 'freeze']):
+                        cluster_label = "Technical Issues"
+                    elif any(word in first_phrase.lower() for word in ['payment', 'billing', 'charge', 'money']):
+                        cluster_label = "Payment & Billing"
+                    elif any(word in first_phrase.lower() for word in ['login', 'account', 'password']):
+                        cluster_label = "Login & Account"
+                    elif any(word in first_phrase.lower() for word in ['slow', 'loading', 'performance']):
+                        cluster_label = "Performance Issues"
+                    else:
+                        cluster_label = "General Complaints"
+                else:
+                    cluster_label = f"Cluster {cluster_id + 1}"
+                
+                # Representative reviews (top 3 by helpful votes)
+                representative_reviews = sorted(cluster_reviews, key=lambda x: x.get('thumbsUpCount', 1), reverse=True)[:3]
+                rep_reviews_formatted = []
+                for review in representative_reviews:
+                    rep_reviews_formatted.append({
+                        "text": review.get('review', ''),
+                        "thumbsUpCount": review.get('thumbsUpCount', 1)
+                    })
+                
+                cluster_data = {
+                    'Cluster ID': cluster_id,
+                    'Cluster Label': cluster_label,
+                    'Review Count': review_count,
+                    'Percent of Clustered Reviews': round(percent_of_clustered, 1),
+                    'Total Helpful Votes': total_helpful_votes,
+                    'Avg Severity': round(avg_severity, 3),
+                    'Avg Helpful Votes': round(avg_helpful_votes, 1),
+                    'Criticality Score': round(criticality_score, 2),
+                    'Concern Level': concern_level,
+                    'Top Complaint Phrases': top_phrases,
+                    'Most Helpful Complaint': most_helpful_complaint,
+                    'Representative Reviews': rep_reviews_formatted
+                }
+                
+                cluster_summary.append(cluster_data)
+            
+            logger.info("✅ Step 6: Return Final Output Per Cluster")
+            
+            # Sort clusters by criticality score (descending)
+            cluster_summary.sort(key=lambda x: x['Criticality Score'], reverse=True)
+            
+            # Calculate final coverage statistics
+            final_clustered_reviews = sum(cluster['Review Count'] for cluster in cluster_summary)
+            coverage_percentage = (final_clustered_reviews / total_negative_reviews * 100) if total_negative_reviews > 0 else 0
+            
+            # Generate coverage sentence
+            coverage_sentence = f"Showing AI clusters from {final_clustered_reviews} of {total_negative_reviews} negative reviews ({coverage_percentage:.1f}% coverage)"
+            
+            return {
+                "total_negative_reviews": total_negative_reviews,
+                "total_clustered_reviews": final_clustered_reviews,
+                "coverage_percentage": round(coverage_percentage, 1),
+                "coverage_sentence": coverage_sentence,
+                "cluster_summary": cluster_summary
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in negative review cluster analysis: {str(e)}")
+            return {
+                "total_negative_reviews": 0,
+                "total_clustered_reviews": 0,
+                "coverage_percentage": 0.0,
+                "coverage_sentence": "Showing AI clusters from 0 of 0 negative reviews (0% coverage)",
+                "cluster_summary": [],
+                "error": str(e)
+            }
+
+    def analyze_critical_user_complaints(self, reviews):
+        """
+        Improved criticality analysis for negative reviews using semantic similarity clustering.
+        
+        Formula: criticality = (number of complaints) × (avg. severity from sentiment model) + (number of times reviews were marked helpful × 2)
+        
+        Uses semantic clustering to group similar complaints and generates human-readable theme names.
+        """
+        try:
+            logger.info("🔴 Starting improved critical user complaints analysis...")
+            
+            # Step 1: Filter negative reviews (score ≤ 2 OR negative sentiment)
+            negative_reviews = []
+            for review in reviews:
+                # Handle different rating field names
+                score = review.get('score', review.get('rating', 5))
+                sentiment = review.get('sentiment_analysis', {})
+                sentiment_label = sentiment.get('final_sentiment', '').lower()
+                
+                # More flexible negative review detection
+                is_negative = (
+                    score <= 2 or  # Low rating
+                    sentiment_label == 'negative' or  # Negative sentiment
+                    (sentiment.get('vader_compound', 0) < -0.1) or  # VADER negative
+                    (sentiment.get('textblob_polarity', 0) < -0.1)  # TextBlob negative
+                )
+                
+                if is_negative:
+                    # Ensure required fields are set with defaults
+                    if 'thumbsUpCount' not in review or review['thumbsUpCount'] is None:
+                        review['thumbsUpCount'] = 0  # Default to 0 for unhelpful
+                    # Ensure content field exists
+                    if 'content' not in review:
+                        review['content'] = review.get('review', '')
+                    # Ensure proper date format
+                    if 'at' not in review:
+                        review['at'] = review.get('date', 'Unknown')
+                    negative_reviews.append(review)
+            
+            if len(negative_reviews) < 5:
+                logger.info(f"Not enough negative reviews ({len(negative_reviews)}) for critical analysis")
+                return {
+                    "total_negative_reviews": len(negative_reviews),
+                    "critical_issues": [],
+                    "summary_table": [],
+                    "message": "Insufficient negative reviews for critical analysis"
+                }
+            
+            logger.info(f"Analyzing {len(negative_reviews)} negative reviews for critical issues")
+            
+            # Step 2: Use semantic clustering to group similar complaints
+            try:
+                # Try advanced clustering with sentence transformers
+                if KEYBERT_AVAILABLE:
+                    from sentence_transformers import SentenceTransformer
+                    from sklearn.cluster import KMeans
+                    from sklearn.metrics.pairwise import cosine_similarity
+                    import numpy as np
+                    
+                    # Extract review texts
+                    texts = [review.get('content', '') for review in negative_reviews]
+                    
+                    # Create embeddings
+                    model = SentenceTransformer('all-MiniLM-L6-v2')
+                    embeddings = model.encode(texts)
+                    
+                    # Determine optimal number of clusters (between 3-8)
+                    n_clusters = min(max(3, len(negative_reviews) // 10), 8)
+                    
+                    # Perform clustering
+                    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                    cluster_labels = kmeans.fit_predict(embeddings)
+                    
+                    # Group reviews by cluster
+                    clusters = {}
+                    for i, label in enumerate(cluster_labels):
+                        if label not in clusters:
+                            clusters[label] = []
+                        clusters[label].append(negative_reviews[i])
+                    
+                    logger.info(f"Created {len(clusters)} semantic clusters")
+                    
+                else:
+                    # Fallback to keyword-based clustering
+                    clusters = self._fallback_keyword_clustering(negative_reviews)
+                    
+            except Exception as e:
+                logger.warning(f"Semantic clustering failed, using fallback: {e}")
+                clusters = self._fallback_keyword_clustering(negative_reviews)
+            
+            # Step 3: Generate human-readable theme names for each cluster
+            theme_clusters = {}
+            for cluster_id, cluster_reviews in clusters.items():
+                if len(cluster_reviews) < 2:  # Skip clusters with too few reviews
+                    continue
+                    
+                theme_name = self._generate_theme_name(cluster_reviews)
+                theme_clusters[theme_name] = cluster_reviews
+            
+            # Step 4: Calculate criticality scores using the user's exact formula
+            critical_issues = []
+            summary_table = []
+            
+            for theme_name, theme_reviews in theme_clusters.items():
+                # Number of complaints
+                complaint_count = len(theme_reviews)
+                
+                # Calculate average severity from sentiment model
+                severity_scores = []
+                for review in theme_reviews:
+                    sentiment = review.get('sentiment_analysis', {})
+                    
+                    # Use VADER compound score as primary severity indicator
+                    if 'vader_compound' in sentiment:
+                        compound = float(sentiment.get('vader_compound', -0.5))
+                        # Convert VADER compound (-1 to 1) to severity (1 to 5 scale)
+                        # More negative compound = higher severity
+                        severity = 3 + (abs(compound) * 2)  # Range 1-5, negative values get higher severity
+                    elif 'textblob_polarity' in sentiment:
+                        polarity = float(sentiment.get('textblob_polarity', -0.3))
+                        severity = 3 + (abs(polarity) * 2)  # Similar conversion for TextBlob
+                    else:
+                        # Use review rating as fallback severity indicator
+                        rating = review.get('score', review.get('rating', 2))
+                        severity = 6 - rating  # Rating 1 = severity 5, Rating 5 = severity 1
+                    
+                    severity_scores.append(max(1, min(5, severity)))  # Clamp to 1-5 range
+                
+                avg_severity = sum(severity_scores) / len(severity_scores) if severity_scores else 3.5
+                
+                # Number of times reviews were marked helpful
+                total_helpful_votes = sum(review.get('thumbsUpCount', 0) for review in theme_reviews)
+                
+                # Calculate Criticality Score using user's exact formula
+                criticality_score = (complaint_count * avg_severity) + (total_helpful_votes * 2)
+                
+                # Calculate percentage of negative reviews
+                percentage_of_negative = (complaint_count / len(negative_reviews)) * 100
+                
+                # Find most helpful review (highest thumbsUpCount)
+                most_helpful_review = max(theme_reviews, key=lambda r: r.get('thumbsUpCount', 0))
+                
+                # Get top 2-3 representative complaints (mix of helpful and recent)
+                representative_complaints = self._get_representative_complaints(theme_reviews)
+                
+                # Extract top problem phrases
+                problem_phrases = self._extract_complaint_phrases(theme_reviews)
+                
+                # Determine criticality label based on score thresholds
+                if criticality_score > 75:
+                    criticality_label = "Critical"
+                    criticality_tag = "🔴 Critical"
+                elif criticality_score > 35:
+                    criticality_label = "Major"
+                    criticality_tag = "🟠 Major"
+                else:
+                    criticality_label = "Minor"
+                    criticality_tag = "🟡 Minor"
+                
+                # Format most helpful review date
+                formatted_date = self._format_review_date(most_helpful_review.get('at', 'Unknown'))
+                
+                # Create issue data
+                issue_data = {
+                    "theme": theme_name,
+                    "complaint_count": complaint_count,
+                    "criticality_score": round(criticality_score, 1),
+                    "percentage_of_negative": round(percentage_of_negative, 1),
+                    "criticality_label": criticality_label,
+                    "criticality_tag": criticality_tag,
+                    "avg_severity": round(avg_severity, 2),
+                    "total_helpful_votes": total_helpful_votes,
+                    "most_helpful_review": {
+                        "text": most_helpful_review.get('content', '')[:300] + "..." if len(most_helpful_review.get('content', '')) > 300 else most_helpful_review.get('content', ''),
+                        "thumbsUpCount": most_helpful_review.get('thumbsUpCount', 0),
+                        "date": formatted_date,
+                        "rating": most_helpful_review.get('score', most_helpful_review.get('rating', 1))
+                    },
+                    "representative_complaints": representative_complaints,
+                    "top_problem_phrases": problem_phrases
+                }
+                
+                critical_issues.append(issue_data)
+                
+                # Add to summary table
+                summary_table.append({
+                    "theme": theme_name,
+                    "percentage_of_reviews": round(percentage_of_negative, 1),
+                    "complaint_count": complaint_count,
+                    "criticality_score": round(criticality_score, 1),
+                    "label": criticality_label
+                })
+            
+            # Step 5: Sort by criticality score (descending) and number them
+            critical_issues.sort(key=lambda x: x['criticality_score'], reverse=True)
+            summary_table.sort(key=lambda x: x['criticality_score'], reverse=True)
+            
+            # Add ranking numbers
+            for i, issue in enumerate(critical_issues):
+                issue['rank'] = i + 1
+            
+            logger.info(f"Identified {len(critical_issues)} critical complaint themes")
+            
+            return {
+                "total_negative_reviews": len(negative_reviews),
+                "critical_issues": critical_issues,  # Return ALL themes, not limited to 10
+                "summary_table": summary_table,
+                "analysis_method": "(number of complaints) × (avg. severity from sentiment model) + (number of times reviews were marked helpful × 2)",
+                "clustering_method": "Semantic similarity clustering with human-readable theme names"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in critical complaints analysis: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {
+                "total_negative_reviews": 0,
+                "critical_issues": [],
+                "summary_table": [],
+                "error": str(e)
+            }
+    
+    def _fallback_keyword_clustering(self, negative_reviews):
+        """Fallback keyword-based clustering when semantic clustering is not available"""
+        issue_themes = {
+            "Payment & Billing Problems": [
+                "payment", "billing", "charge", "charged", "refund", "money", "cost", 
+                "price", "subscription", "cancel", "credit card", "paypal",
+                "transaction", "purchase", "buy", "paid", "expensive", "free trial"
+            ],
+            "Login & Account Issues": [
+                "login", "log in", "sign in", "signin", "account", "password", "username",
+                "forgot password", "locked out", "can't access", "verification", "authenticate",
+                "register", "signup"
+            ],
+            "App Crashes & Freezing": [
+                "crash", "crashes", "freeze", "frozen", "hang", "stuck", "not responding",
+                "closes", "shuts down", "stops working", "black screen"
+            ],
+            "Slow Performance": [
+                "slow", "lag", "laggy", "loading", "performance", "speed", "responsive",
+                "takes forever", "long time", "waiting"
+            ],
+            "Technical Bugs & Errors": [
+                "bug", "error", "glitch", "broken", "not working", "doesn't work", 
+                "malfunction", "issue", "problem", "fail", "failed", "wrong"
+            ],
+            "User Interface Problems": [
+                "interface", "ui", "design", "layout", "confusing", "hard to use",
+                "navigation", "menu", "button", "click", "tap", "screen", "display"
+            ],
+            "Missing Features": [
+                "feature", "add", "need", "want", "wish", "should have", "missing",
+                "improvement", "better", "enhance", "update", "would like"
+            ],
+            "Customer Support Issues": [
+                "support", "help", "service", "customer", "response", "reply", "contact",
+                "assistance", "staff", "team", "representative", "no response"
+            ],
+            "Scam & Fraud Reports": [
+                "scam", "fraud", "fake", "spam", "suspicious", "cheat", "steal",
+                "money back", "rip off", "dishonest", "misleading"
+            ]
+        }
+        
+        # Group reviews by themes
+        theme_reviews = {theme: [] for theme in issue_themes}
+        unmatched_reviews = []
+        
+        for review in negative_reviews:
+            review_text = review.get('content', '').lower()
+            matched = False
+            
+            for theme, keywords in issue_themes.items():
+                if any(keyword in review_text for keyword in keywords):
+                    theme_reviews[theme].append(review)
+                    matched = True
+                    break
+            
+            if not matched:
+                unmatched_reviews.append(review)
+        
+        # Add unmatched reviews as "General Complaints"
+        if unmatched_reviews:
+            theme_reviews["General Complaints"] = unmatched_reviews
+        
+        # Convert to cluster format
+        clusters = {}
+        cluster_id = 0
+        for theme, reviews in theme_reviews.items():
+            if reviews:  # Only include non-empty themes
+                clusters[cluster_id] = reviews
+                cluster_id += 1
+        
+        return clusters
+    
+    def _generate_theme_name(self, cluster_reviews):
+        """Generate a human-readable theme name based on cluster content"""
+        try:
+            # Extract common keywords and phrases
+            texts = [review.get('content', '').lower() for review in cluster_reviews]
+            combined_text = ' '.join(texts)
+            
+            # Common complaint patterns
+            patterns = {
+                "Payment Failures": ["payment", "pay", "charge", "billing", "refund", "money"],
+                "Login Problems": ["login", "sign in", "account", "password", "access"],
+                "App Crashes": ["crash", "freeze", "hang", "stop", "close", "shut"],
+                "Slow Performance": ["slow", "lag", "loading", "speed", "fast"],
+                "Scam Reports": ["scam", "fraud", "fake", "spam", "cheat", "steal"],
+                "Technical Bugs": ["bug", "error", "glitch", "broken", "not work"],
+                "UI/UX Issues": ["confusing", "hard", "difficult", "interface", "design"],
+                "Missing Features": ["need", "want", "add", "missing", "should have"],
+                "Customer Service": ["support", "help", "service", "response", "contact"],
+                "Data Loss": ["lost", "delete", "missing", "gone", "disappear"],
+                "Subscription Issues": ["subscription", "cancel", "trial", "auto", "renew"],
+                "Update Problems": ["update", "version", "new", "change", "different"]
+            }
+            
+            # Score each pattern
+            pattern_scores = {}
+            for pattern_name, keywords in patterns.items():
+                score = sum(combined_text.count(keyword) for keyword in keywords)
+                if score > 0:
+                    pattern_scores[pattern_name] = score
+            
+            # Return the highest scoring pattern
+            if pattern_scores:
+                return max(pattern_scores.items(), key=lambda x: x[1])[0]
+            else:
+                return "General Complaints"
+                
+        except Exception as e:
+            logger.warning(f"Could not generate theme name: {e}")
+            return "General Complaints"
+    
+    def _get_representative_complaints(self, theme_reviews):
+        """Get top 2-3 representative complaints with highlights"""
+        try:
+            # Sort by helpfulness and recency
+            sorted_reviews = sorted(theme_reviews, key=lambda r: (
+                r.get('thumbsUpCount', 0),
+                len(r.get('content', ''))
+            ), reverse=True)
+            
+            representative = []
+            for review in sorted_reviews[:3]:
+                # Extract key phrases from the review
+                content = review.get('content', '')
+                highlights = self._extract_highlights(content)
+                
+                representative.append({
+                    "text": content[:200] + "..." if len(content) > 200 else content,
+                    "rating": review.get('score', review.get('rating', 1)),
+                    "thumbsUpCount": review.get('thumbsUpCount', 0),
+                    "date": self._format_review_date(review.get('at', 'Unknown')),
+                    "highlights": highlights[:3]  # Top 3 highlights
+                })
+            
+            return representative
+            
+        except Exception as e:
+            logger.warning(f"Could not get representative complaints: {e}")
+            return []
+    
+    def _extract_complaint_phrases(self, theme_reviews):
+        """Extract top complaint phrases from theme reviews"""
+        try:
+            if not SKLEARN_AVAILABLE:
+                return []
+                
+            from sklearn.feature_extraction.text import CountVectorizer
+            
+            texts = [review.get('content', '') for review in theme_reviews]
+            
+            # Use CountVectorizer to extract 2-3 word phrases
+            vectorizer = CountVectorizer(
+                ngram_range=(2, 3),
+                max_features=15,
+                stop_words='english',
+                lowercase=True,
+                min_df=2  # Must appear in at least 2 reviews
+            )
+            
+            X = vectorizer.fit_transform(texts)
+            feature_names = vectorizer.get_feature_names_out()
+            
+            # Get phrase frequencies
+            phrase_frequencies = X.sum(axis=0).A1
+            phrase_data = list(zip(feature_names, phrase_frequencies))
+            
+            # Sort by frequency and get top phrases
+            top_phrases = sorted(phrase_data, key=lambda x: x[1], reverse=True)[:5]
+            return [{"phrase": phrase, "frequency": int(freq)} for phrase, freq in top_phrases]
+            
+        except Exception as e:
+            logger.warning(f"Could not extract complaint phrases: {e}")
+            return []
+    
+    def _extract_highlights(self, text):
+        """Extract key highlights from review text"""
+        try:
+            # Simple extraction of impactful phrases
+            sentences = text.split('.')
+            highlights = []
+            
+            # Look for sentences with strong negative words
+            negative_indicators = [
+                "terrible", "awful", "horrible", "worst", "hate", "broken", "useless",
+                "doesn't work", "not working", "can't", "won't", "never", "always",
+                "frustrated", "disappointed", "angry", "annoyed"
+            ]
+            
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if len(sentence) > 10 and any(indicator in sentence.lower() for indicator in negative_indicators):
+                    highlights.append(sentence)
+                    if len(highlights) >= 3:
+                        break
+            
+            return highlights
+            
+        except Exception as e:
+            return []
+    
+    def _format_review_date(self, date_str):
+        """Format review date consistently and fix year issues"""
+        try:
+            if date_str == 'Unknown' or not date_str:
+                return 'Unknown'
+            
+            # Handle different date formats
+            if isinstance(date_str, str):
+                import re
+                from datetime import datetime
+                
+                # Check if it's a timestamp or epoch time
+                if date_str.isdigit():
+                    timestamp = int(date_str)
+                    if timestamp > 1000000000:  # Unix timestamp
+                        dt = datetime.fromtimestamp(timestamp)
+                        return dt.strftime('%B %d, %Y')
+                
+                # Try to parse ISO format
+                if re.match(r'\d{4}-\d{2}-\d{2}', date_str):
+                    try:
+                        dt = datetime.strptime(date_str[:10], '%Y-%m-%d')
+                        return dt.strftime('%B %d, %Y')
+                    except:
+                        pass
+                
+                # Handle relative dates like "2 months ago"
+                if 'ago' in date_str.lower():
+                    current_year = datetime.now().year
+                    if 'month' in date_str:
+                        return f"Recent ({current_year})"
+                    elif 'day' in date_str:
+                        return f"Recent ({current_year})"
+                    elif 'year' in date_str:
+                        years_ago = re.findall(r'(\d+)', date_str)
+                        if years_ago:
+                            year = current_year - int(years_ago[0])
+                            return f"Approximately {year}"
+                
+                # If already in readable format, check year
+                if re.match(r'\w+ \d{1,2}, \d{4}', date_str):
+                    # Extract year and validate
+                    year_match = re.search(r'(\d{4})', date_str)
+                    if year_match:
+                        year = int(year_match.group(1))
+                        current_year = datetime.now().year
+                        if year > current_year:
+                            # Fix future years
+                            corrected_date = date_str.replace(str(year), str(current_year))
+                            return corrected_date
+                    return date_str
+                
+                # Default case - try to extract meaningful info
+                return date_str
+            
+            return str(date_str)
+            
+        except Exception as e:
+            logger.warning(f"Date formatting error: {e}")
+            return 'Unknown'
 
 # No global instance - will be created in main.py 
