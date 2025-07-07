@@ -334,6 +334,7 @@ export default function Home() {
   const [activeAnalysisTab, setActiveAnalysisTab] = useState<'overview' | 'positive' | 'negative' | 'features'>('overview');
   const [showCriticalityModal, setShowCriticalityModal] = useState(false);
   const [showCriticalityExplanationModal, setShowCriticalityExplanationModal] = useState(false);
+  const [collapsedThemes, setCollapsedThemes] = useState<Set<number>>(new Set());
   const [url, setUrl] = useState("");
   const [reviewCount, setReviewCount] = useState(500);
   const [selectedStars, setSelectedStars] = useState<number[]>([]);
@@ -358,6 +359,18 @@ export default function Home() {
 
   const clearStarFilters = useCallback(() => {
     setSelectedStars([]);
+  }, []);
+
+  const toggleThemeCollapse = useCallback((themeIndex: number) => {
+    setCollapsedThemes(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(themeIndex)) {
+        newSet.delete(themeIndex);
+      } else {
+        newSet.add(themeIndex);
+      }
+      return newSet;
+    });
   }, []);
 
   const getSentimentColor = (sentiment: string): string => {
@@ -1767,15 +1780,18 @@ export default function Home() {
                     <CardHeader>
                       <CardTitle className="text-2xl text-white">😞 Negative Themes</CardTitle>
                       <CardDescription className="text-gray-300">
-                        What users complain about - {sentimentResults.classification_meta.negative_percentage.toFixed(1)}% of reviews ({sentimentResults.classification_meta.negative_reviews} reviews)
+                        What users complain about - {sentimentResults.classification_meta.negative_percentage.toFixed(1)}% of total reviews ({sentimentResults.classification_meta.negative_reviews} reviews) are negative
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-6">
                         {sentimentResults.negative_themes.slice(0, 5).map((theme, index) => (
                           <div key={index} className="bg-slate-900/30 rounded-lg overflow-hidden">
-                            {/* Theme Header */}
-                            <div className="flex items-center justify-between p-4 border-b border-slate-700">
+                            {/* Theme Header - Now Clickable */}
+                            <div 
+                              className="flex items-center justify-between p-4 border-b border-slate-700 cursor-pointer hover:bg-slate-800/50 transition-colors"
+                              onClick={() => toggleThemeCollapse(index)}
+                            >
                               <div className="flex items-center gap-4">
                                 <div className="text-2xl font-bold text-gray-400">#{index + 1}</div>
                                 <div>
@@ -1793,16 +1809,43 @@ export default function Home() {
                                   {theme.severity_level}
                                 </Badge>
                                 <div className="text-right">
-                                  <div className="text-lg font-bold text-red-400">{theme.combined_score}</div>
+                                  <div className="text-lg font-bold text-red-400">{((theme.complaint_count * theme.average_rating) + (theme.actual_reviews?.reduce((sum, review) => sum + (review.thumbsUpCount || 0), 0) || 0) * 2).toFixed(0)}</div>
                                   <div className="text-xs text-gray-400">Impact Score</div>
+                                </div>
+                                <div className="text-lg text-gray-400">
+                                  {collapsedThemes.has(index) ? '▼' : '▶'}
                                 </div>
                               </div>
                             </div>
                             
-                            {/* Actual Reviews */}
-                            {theme.actual_reviews && theme.actual_reviews.length > 0 && (
+                            {/* Collapsible Content */}
+                            {!collapsedThemes.has(index) && theme.actual_reviews && theme.actual_reviews.length > 0 && (
                               <div className="p-4">
-                                <h4 className="text-sm font-medium text-gray-300 mb-3">What users are saying:</h4>
+                                {/* Most Helpful Review */}
+                                {(() => {
+                                  const mostHelpfulReview = theme.actual_reviews.reduce((prev, current) => 
+                                    (current.thumbsUpCount || 0) > (prev.thumbsUpCount || 0) ? current : prev
+                                  );
+                                  return mostHelpfulReview.thumbsUpCount && mostHelpfulReview.thumbsUpCount > 0 ? (
+                                    <div className="mb-4">
+                                      <h4 className="text-sm font-medium text-yellow-400 mb-2">👍 Most Helpful Review ({mostHelpfulReview.thumbsUpCount} votes):</h4>
+                                      <div className="bg-slate-800/60 rounded-lg p-3 border-l-4 border-yellow-500">
+                                        <div className="flex items-center justify-between mb-2">
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-xs text-gray-400">★ {mostHelpfulReview.rating}/5</span>
+                                            <span className="text-xs text-gray-500">by {mostHelpfulReview.author}</span>
+                                          </div>
+                                          <span className="text-xs text-gray-500">{mostHelpfulReview.date}</span>
+                                        </div>
+                                        <div className="text-sm text-gray-200 leading-relaxed">
+                                          {mostHelpfulReview.full_text}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : null;
+                                })()}
+                                
+                                <h4 className="text-sm font-medium text-gray-300 mb-3">Other examples:</h4>
                                 <div className="space-y-3">
                                   {theme.actual_reviews.slice(0, 3).map((review, reviewIndex) => (
                                     <div key={reviewIndex} className="bg-slate-800/40 rounded-lg p-3">
@@ -1828,12 +1871,9 @@ export default function Home() {
                                         </div>
                                       )}
                                       
-                                      {/* Full Review Text (truncated) */}
-                                      <div className="text-sm text-gray-300">
-                                        {review.full_text.length > 200 
-                                          ? `${review.full_text.substring(0, 200)}...` 
-                                          : review.full_text
-                                        }
+                                      {/* Full Review Text */}
+                                      <div className="text-sm text-gray-300 leading-relaxed">
+                                        {review.full_text}
                                       </div>
                                       
                                       {/* Matched Keyword */}
@@ -2317,6 +2357,37 @@ export default function Home() {
           </Card>
         )}
       </div>
+
+      {/* Impact Score Formula Explanation */}
+      {activeTab === 'analysis' && analysisResults && (
+        <div className="mt-8 p-6 bg-slate-800/30 border border-slate-600 rounded-lg">
+          <h3 className="text-lg font-semibold text-white mb-4">📊 Impact Score Formula</h3>
+          <div className="space-y-3 text-gray-300">
+            <div className="text-center p-4 bg-slate-900/50 rounded-lg border border-slate-700">
+              <div className="text-xl font-mono text-blue-400">
+                Impact Score = (Complaint Count × Avg. Severity) + (Helpful Votes × 2)
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              <div className="bg-slate-900/30 p-3 rounded-lg">
+                <div className="font-semibold text-blue-400 mb-1">Complaint Count</div>
+                <div className="text-gray-400">Shows how often the problem occurs.</div>
+              </div>
+              <div className="bg-slate-900/30 p-3 rounded-lg">
+                <div className="font-semibold text-yellow-400 mb-1">Avg. Severity</div>
+                <div className="text-gray-400">Reflects how strongly users feel about it (from -1 to 1).</div>
+              </div>
+              <div className="bg-slate-900/30 p-3 rounded-lg">
+                <div className="font-semibold text-green-400 mb-1">Helpful Votes × 2</div>
+                <div className="text-gray-400">Gives extra weight to reviews others found valuable.</div>
+              </div>
+            </div>
+            <div className="text-center text-sm text-gray-400 italic">
+              This score ranks issues by how serious and widespread they are.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

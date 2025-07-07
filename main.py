@@ -154,7 +154,7 @@ APP_TYPE_CONFIGS = {
 class ReviewRequest(BaseModel):
     """Request model for fetching app reviews"""
     url: str = Field(..., description="Play Store URL of the app")
-    count: int = Field(default=100, ge=1, le=5000, description="Number of reviews to fetch (1-5000)")
+    count: Optional[int] = Field(default=100, description="Number of reviews to fetch (None for all available)")
     star_filters: Optional[List[int]] = Field(default=None, description="List of star ratings to filter by (1-5)")
     negative_only: bool = Field(default=False, description="Export only negative reviews (1-2 stars)")
     export_format: str = Field(default="csv", description="Export format: 'csv' or 'xlsx'")
@@ -439,14 +439,72 @@ async def get_reviews(payload: ReviewRequest):
         if not app_id:
             raise HTTPException(status_code=400, detail="Invalid Play Store URL")
         
-        # Fetch reviews using google-play-scraper
-        result, _ = reviews(
-            app_id, 
-            lang="en", 
-            country="us", 
-            sort=Sort.NEWEST, 
-            count=payload.count
-        )
+        # Handle unlimited reviews (paginated fetching)
+        if payload.count is None:
+            # Fetch all available reviews in batches
+            all_reviews = []
+            batch_size = 200
+            continuation_token = None
+            
+            logger.info("Starting paginated fetch for unlimited reviews...")
+            batch_count = 1
+            
+            while True:
+                try:
+                    logger.info(f"Fetching batch {batch_count}: {batch_size} reviews...")
+                    
+                    if continuation_token:
+                        batch_result, continuation_token = reviews(
+                            app_id,
+                            lang="en",
+                            country="us", 
+                            sort=Sort.NEWEST,
+                            count=batch_size,
+                            continuation_token=continuation_token
+                        )
+                    else:
+                        batch_result, continuation_token = reviews(
+                            app_id,
+                            lang="en",
+                            country="us", 
+                            sort=Sort.NEWEST,
+                            count=batch_size
+                        )
+                    
+                    if not batch_result:
+                        logger.info("No more reviews available")
+                        break
+                        
+                    all_reviews.extend(batch_result)
+                    logger.info(f"Batch {batch_count} completed: {len(batch_result)} reviews (total: {len(all_reviews)})")
+                    
+                    # Break if no continuation token (end of reviews)
+                    if not continuation_token:
+                        logger.info("Reached end of available reviews")
+                        break
+                        
+                    batch_count += 1
+                    
+                    # Safety limit to prevent infinite loops
+                    if len(all_reviews) >= 10000:
+                        logger.info("Reached safety limit of 10,000 reviews")
+                        break
+                        
+                except Exception as batch_error:
+                    logger.error(f"Error in batch {batch_count}: {batch_error}")
+                    break
+                    
+            result = all_reviews
+            logger.info(f"Pagination completed: {len(result)} reviews fetched")
+        else:
+            # Fetch specific count
+            result, _ = reviews(
+                app_id, 
+                lang="en", 
+                country="us", 
+                sort=Sort.NEWEST, 
+                count=payload.count
+            )
         
         # Format reviews
         formatted_reviews = [
@@ -526,12 +584,13 @@ async def export_reviews_csv(payload: ReviewRequest):
             raise HTTPException(status_code=400, detail="Invalid Play Store URL")
         
         # Fetch reviews (reuse logic from get_reviews)
+        count_to_use = payload.count if payload.count is not None else 1000  # Default to 1000 for CSV export
         result, _ = reviews(
             app_id, 
             lang="en", 
             country="us", 
             sort=Sort.NEWEST, 
-            count=payload.count
+            count=count_to_use
         )
         
         # Format reviews
@@ -1121,12 +1180,13 @@ async def get_helpful_reviews(payload: ReviewRequest):
             raise HTTPException(status_code=400, detail="Invalid Play Store URL")
         
         # Fetch reviews using google-play-scraper, sorted by helpfulness if possible
+        count_to_use = payload.count if payload.count is not None else 1000  # Default to 1000 for helpful reviews
         result, _ = reviews(
             app_id, 
             lang="en", 
             country="us", 
             sort=Sort.NEWEST,  # We'll sort by helpfulness manually
-            count=payload.count
+            count=count_to_use
         )
         
         # Format reviews with helpfulness data
