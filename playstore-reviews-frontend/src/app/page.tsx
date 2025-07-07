@@ -308,11 +308,12 @@ interface SentimentSeparationResults {
 
 // ===== CONSTANTS =====
 const REVIEW_COUNT_OPTIONS = [
-  { value: 400, label: "400 reviews" },
+  { value: 500, label: "500 reviews" },
+  { value: 1000, label: "1,000 reviews" },
   { value: 2000, label: "2,000 reviews" },
-  { value: 4000, label: "4,000 reviews" },
-  { value: 8000, label: "8,000 reviews" },
-  { value: 20000, label: "20,000 reviews" }
+  { value: 5000, label: "5,000 reviews" },
+  { value: 10000, label: "10,000 reviews" },
+  { value: -1, label: "All reviews" }
 ];
 
 const STAR_RATINGS = [1, 2, 3, 4, 5];
@@ -334,7 +335,7 @@ export default function Home() {
   const [showCriticalityModal, setShowCriticalityModal] = useState(false);
   const [showCriticalityExplanationModal, setShowCriticalityExplanationModal] = useState(false);
   const [url, setUrl] = useState("");
-  const [reviewCount, setReviewCount] = useState(100);
+  const [reviewCount, setReviewCount] = useState(500);
   const [selectedStars, setSelectedStars] = useState<number[]>([]);
   const [error, setError] = useState("");
   
@@ -463,7 +464,7 @@ export default function Home() {
     try {
       const payload = {
         url,
-        count: reviewCount,
+        count: reviewCount === -1 ? undefined : reviewCount, // undefined means fetch all reviews
         star_filters: selectedStars.length > 0 ? selectedStars : undefined
       };
 
@@ -504,7 +505,7 @@ export default function Home() {
     try {
       const payload = {
         url,
-        count: Math.min(reviewCount, 1000), // Limit analysis to 1000 reviews for performance
+        count: reviewCount === -1 ? 1000 : Math.min(reviewCount, 1000), // Limit analysis to 1000 reviews for performance
         star_filters: selectedStars.length > 0 ? selectedStars : undefined,
         include_sentiment: true,
         include_topics: true,
