@@ -856,7 +856,7 @@ export default function Home() {
     }
   };
 
-  const exportNegativeReviewsToExcel = async () => {
+  const exportAllReviewsToExcel = async () => {
     if (!url.trim()) {
       setError("Please enter a valid Play Store URL");
       return;
@@ -867,9 +867,8 @@ export default function Home() {
     try {
       const payload = {
         url,
-        count: reviewCount,
-        star_filters: [1, 2], // Only 1 and 2 star reviews for negative analysis
-        negative_only: true
+        count: reviewCount === -1 ? undefined : reviewCount,
+        star_filters: selectedStars.length > 0 ? selectedStars : undefined
       };
 
       const response = await fetch(API_ENDPOINTS.reviewsCsv, {
@@ -884,7 +883,7 @@ export default function Home() {
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
-      link.download = `negative_reviews_${appId || 'export'}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      link.download = `all_reviews_${appId || 'export'}_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -1336,7 +1335,7 @@ export default function Home() {
                       </Button>
 
                       <Button 
-                        onClick={exportNegativeReviewsToExcel} 
+                        onClick={exportAllReviewsToExcel} 
                         disabled={loading || !reviews.length}
                         className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-medium px-6 border-2 border-green-500/50 hover:border-green-400"
                       >
@@ -1513,57 +1512,76 @@ export default function Home() {
                   </CardContent>
                 </Card>
 
-                {/* Rating Distribution Changes Summary */}
-                <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
-                  <CardHeader>
-                    <CardTitle className="text-xl text-white">📈 Rating Distribution Trends</CardTitle>
-                    <CardDescription className="text-gray-300">
-                      How ratings have changed over the last 7 days and 30 days
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      <div className="bg-slate-900/30 rounded-lg p-4">
-                        <h4 className="text-sm font-medium text-gray-300 mb-3">Positive Reviews (4-5 stars):</h4>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          <div>
-                            <div className="text-green-400 font-medium">Last 7 days: 72.3% (145 reviews)</div>
-                            <div className="text-gray-400">Previous 7 days: 68.1% (128 reviews)</div>
-                            <div className="text-green-300 text-xs">↗ +4.2% increase</div>
-                          </div>
-                          <div>
-                            <div className="text-green-400 font-medium">Last 30 days: 69.8% (523 reviews)</div>
-                            <div className="text-gray-400">Previous 30 days: 71.2% (498 reviews)</div>
-                            <div className="text-red-300 text-xs">↘ -1.4% decrease</div>
-                          </div>
+                {/* Rating Distribution Changes Summary - Side by Side */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Positive Reviews Trend */}
+                  <Card className="bg-green-900/20 backdrop-blur-sm border-green-600/30">
+                    <CardHeader>
+                      <CardTitle className="text-xl text-green-300 flex items-center gap-2">
+                        <span>📈</span>
+                        Positive Reviews Trends
+                      </CardTitle>
+                      <CardDescription className="text-green-200">
+                        4-5 star ratings over time
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-4">
+                        <div className="bg-green-800/30 rounded-lg p-4">
+                          <h4 className="text-sm font-medium text-green-200 mb-3">Last 7 days:</h4>
+                          <div className="text-green-400 font-medium">72.3% (145 reviews)</div>
+                          <div className="text-green-300 text-xs">Previous 7 days: 68.1% (128 reviews)</div>
+                          <div className="text-green-300 text-xs font-medium">↗ +4.2% increase</div>
+                        </div>
+                        
+                        <div className="bg-green-800/30 rounded-lg p-4">
+                          <h4 className="text-sm font-medium text-green-200 mb-3">Last 30 days:</h4>
+                          <div className="text-green-400 font-medium">69.8% (523 reviews)</div>
+                          <div className="text-green-300 text-xs">Previous 30 days: 71.2% (498 reviews)</div>
+                          <div className="text-red-300 text-xs font-medium">↘ -1.4% decrease</div>
                         </div>
                       </div>
-                      
-                      <div className="bg-slate-900/30 rounded-lg p-4">
-                        <h4 className="text-sm font-medium text-gray-300 mb-3">Negative Reviews (1-2 stars):</h4>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          <div>
-                            <div className="text-red-400 font-medium">Last 7 days: 18.2% (36 reviews)</div>
-                            <div className="text-gray-400">Previous 7 days: 22.4% (42 reviews)</div>
-                            <div className="text-green-300 text-xs">↘ -4.2% improvement</div>
-                          </div>
-                          <div>
-                            <div className="text-red-400 font-medium">Last 30 days: 21.1% (158 reviews)</div>
-                            <div className="text-gray-400">Previous 30 days: 19.3% (135 reviews)</div>
-                            <div className="text-red-300 text-xs">↗ +1.8% increase</div>
-                          </div>
-                        </div>
-                      </div>
+                    </CardContent>
+                  </Card>
 
-                      <div className="bg-blue-900/20 rounded-lg p-3 border border-blue-700/30">
-                        <div className="text-sm text-blue-200">
-                          <strong>Summary:</strong> Recent week shows improvement with 4.2% more positive reviews and 4.2% fewer negative reviews. 
-                          However, the 30-day trend indicates a slight increase in negative feedback (+1.8%), suggesting need for continued attention to user concerns.
+                  {/* Negative Reviews Trend */}
+                  <Card className="bg-red-900/20 backdrop-blur-sm border-red-600/30">
+                    <CardHeader>
+                      <CardTitle className="text-xl text-red-300 flex items-center gap-2">
+                        <span>📉</span>
+                        Negative Reviews Trends
+                      </CardTitle>
+                      <CardDescription className="text-red-200">
+                        1-2 star ratings over time
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-4">
+                        <div className="bg-red-800/30 rounded-lg p-4">
+                          <h4 className="text-sm font-medium text-red-200 mb-3">Last 7 days:</h4>
+                          <div className="text-red-400 font-medium">18.2% (36 reviews)</div>
+                          <div className="text-red-300 text-xs">Previous 7 days: 22.4% (42 reviews)</div>
+                          <div className="text-green-300 text-xs font-medium">↘ -4.2% improvement</div>
+                        </div>
+                        
+                        <div className="bg-red-800/30 rounded-lg p-4">
+                          <h4 className="text-sm font-medium text-red-200 mb-3">Last 30 days:</h4>
+                          <div className="text-red-400 font-medium">21.1% (158 reviews)</div>
+                          <div className="text-red-300 text-xs">Previous 30 days: 19.3% (135 reviews)</div>
+                          <div className="text-red-300 text-xs font-medium">↗ +1.8% increase</div>
                         </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Trend Summary */}
+                <div className="bg-blue-900/20 rounded-lg p-4 border border-blue-700/30">
+                  <div className="text-sm text-blue-200">
+                    <strong>Summary:</strong> Recent week shows improvement with 4.2% more positive reviews and 4.2% fewer negative reviews. 
+                    However, the 30-day trend indicates a slight increase in negative feedback (+1.8%), suggesting need for continued attention to user concerns.
+                  </div>
+                </div>
 
                 {/* Review Summaries */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2414,36 +2432,7 @@ export default function Home() {
         )}
       </div>
 
-      {/* Impact Score Formula Explanation */}
-      {activeTab === 'analysis' && analysisResults && (
-        <div className="mt-8 p-6 bg-slate-800/30 border border-slate-600 rounded-lg">
-          <h3 className="text-lg font-semibold text-white mb-4">📊 Impact Score Formula</h3>
-          <div className="space-y-3 text-gray-300">
-            <div className="text-center p-4 bg-slate-900/50 rounded-lg border border-slate-700">
-              <div className="text-xl font-mono text-blue-400">
-                Impact Score = (Complaint Count × Avg. Severity) + (Helpful Votes × 2)
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div className="bg-slate-900/30 p-3 rounded-lg">
-                <div className="font-semibold text-blue-400 mb-1">Complaint Count</div>
-                <div className="text-gray-400">Shows how often the problem occurs.</div>
-              </div>
-              <div className="bg-slate-900/30 p-3 rounded-lg">
-                <div className="font-semibold text-yellow-400 mb-1">Avg. Severity</div>
-                <div className="text-gray-400">Reflects how strongly users feel about it (from -1 to 1).</div>
-              </div>
-              <div className="bg-slate-900/30 p-3 rounded-lg">
-                <div className="font-semibold text-green-400 mb-1">Helpful Votes × 2</div>
-                <div className="text-gray-400">Gives extra weight to reviews others found valuable.</div>
-              </div>
-            </div>
-            <div className="text-center text-sm text-gray-400 italic">
-              This score ranks issues by how serious and widespread they are.
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }
