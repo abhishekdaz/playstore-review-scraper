@@ -1657,7 +1657,9 @@ class ReviewAnalysisEngine:
         # Add critical user complaints analysis (improved criticality scoring)
         try:
             logger.info("Performing critical user complaints analysis with improved scoring...")
-            critical_complaints_analysis = self.analyze_critical_user_complaints(analysis_results.get('reviews', []))
+            # Use the sentiment-analyzed reviews from the analysis_results
+            sentiment_analyzed_reviews = analysis_results.get('sentiment_analysis', {}).get('reviews_with_sentiment', [])
+            critical_complaints_analysis = self.analyze_critical_user_complaints(sentiment_analyzed_reviews)
             insights['critical_user_complaints'] = critical_complaints_analysis
         except Exception as e:
             logger.warning(f"Critical user complaints analysis failed: {e}")
@@ -3899,41 +3901,75 @@ class ReviewAnalysisEngine:
         try:
             logger.info("🔴 Starting improved critical user complaints analysis...")
             
-            # Step 1: Filter negative reviews (score ≤ 2 OR negative sentiment)
+            # Step 1: Filter negative reviews (rating ≤ 2 OR negative sentiment)
             negative_reviews = []
             for review in reviews:
-                # Handle different rating field names
-                score = review.get('score', review.get('rating', 5))
+                # Handle standard review structure from API
+                rating = review.get('rating', 5)
                 sentiment = review.get('sentiment_analysis', {})
-                sentiment_label = sentiment.get('final_sentiment', '').lower()
                 
-                # More flexible negative review detection
+                # Get sentiment label from multiple possible sources
+                sentiment_label = (
+                    sentiment.get('final_sentiment', '') or
+                    sentiment.get('sentiment', '') or 
+                    sentiment.get('overall_sentiment', '')
+                ).lower()
+                
+                # Get VADER compound score from different possible structures
+                vader_compound = sentiment.get('vader_compound', 0)
+                if vader_compound == 0 and 'vader' in sentiment:
+                    vader_data = sentiment.get('vader', {})
+                    if isinstance(vader_data, dict):
+                        vader_compound = vader_data.get('compound', 0)
+                        if vader_compound == 0 and 'scores' in vader_data:
+                            scores = vader_data.get('scores', {})
+                            if isinstance(scores, dict):
+                                vader_compound = scores.get('compound', 0)
+                
+                # Get TextBlob polarity
+                textblob_polarity = sentiment.get('textblob_polarity', 0)
+                if textblob_polarity == 0 and 'textblob' in sentiment:
+                    textblob_data = sentiment.get('textblob', {})
+                    if isinstance(textblob_data, dict):
+                        textblob_polarity = textblob_data.get('polarity', 0)
+                
+                # Enhanced negative review detection with debugging
                 is_negative = (
-                    score <= 2 or  # Low rating
+                    rating <= 2 or  # Low rating (primary indicator)
                     sentiment_label == 'negative' or  # Negative sentiment
-                    (sentiment.get('vader_compound', 0) < -0.1) or  # VADER negative
-                    (sentiment.get('textblob_polarity', 0) < -0.1)  # TextBlob negative
+                    (vader_compound < -0.1) or  # VADER negative
+                    (textblob_polarity < -0.1)  # TextBlob negative
                 )
                 
+                logger.debug(f"Review rating: {rating}, sentiment: {sentiment_label}, vader: {vader_compound}, textblob: {textblob_polarity}, is_negative: {is_negative}")
+                
                 if is_negative:
-                    # Ensure required fields are set with defaults
-                    if 'thumbsUpCount' not in review or review['thumbsUpCount'] is None:
-                        review['thumbsUpCount'] = 0  # Default to 0 for unhelpful
-                    # Ensure content field exists
-                    if 'content' not in review:
-                        review['content'] = review.get('review', '')
-                    # Ensure proper date format
-                    if 'at' not in review:
-                        review['at'] = review.get('date', 'Unknown')
-                    negative_reviews.append(review)
+                    # Normalize review structure for analysis
+                    normalized_review = {
+                        'rating': rating,
+                        'content': review.get('review', ''),  # Use 'review' field as content
+                        'at': review.get('date', 'Unknown'),
+                        'thumbsUpCount': review.get('thumbsUpCount', 0),
+                        'sentiment_analysis': sentiment
+                    }
+                    # Copy any additional fields
+                    for key, value in review.items():
+                        if key not in normalized_review:
+                            normalized_review[key] = value
+                    
+                    negative_reviews.append(normalized_review)
             
-            if len(negative_reviews) < 5:
+            logger.info(f"Filtered {len(negative_reviews)} negative reviews from {len(reviews)} total reviews")
+            
+            if len(negative_reviews) < 3:  # Lowered threshold to be more lenient
                 logger.info(f"Not enough negative reviews ({len(negative_reviews)}) for critical analysis")
                 return {
                     "total_negative_reviews": len(negative_reviews),
                     "critical_issues": [],
                     "summary_table": [],
-                    "message": "Insufficient negative reviews for critical analysis"
+                    "analysis_method": "Enhanced clustering with criticality scoring",
+                    "clustering_method": "Semantic similarity grouping",
+                    "message": f"Only {len(negative_reviews)} negative reviews found - need at least 3 for analysis"
                 }
             
             logger.info(f"Analyzing {len(negative_reviews)} negative reviews for critical issues")

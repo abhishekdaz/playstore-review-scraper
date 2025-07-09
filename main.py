@@ -154,7 +154,7 @@ APP_TYPE_CONFIGS = {
 class ReviewRequest(BaseModel):
     """Request model for fetching app reviews"""
     url: str = Field(..., description="Play Store URL of the app")
-    count: Optional[int] = Field(default=100, description="Number of reviews to fetch (None for all available)")
+    count: Optional[int] = Field(default=None, description="Number of reviews to fetch (None for all available)")
     star_filters: Optional[List[int]] = Field(default=None, description="List of star ratings to filter by (1-5)")
     negative_only: bool = Field(default=False, description="Export only negative reviews (1-2 stars)")
     export_format: str = Field(default="csv", description="Export format: 'csv' or 'xlsx'")
@@ -674,7 +674,9 @@ async def analyze_reviews(payload: AnalysisRequest):
             {
                 "rating": review["score"], 
                 "review": review["content"] or "No review text", 
-                "date": review["at"].isoformat()
+                "date": review["at"].isoformat(),
+                "thumbsUpCount": review.get("thumbsUpCount", 0),
+                "userName": review.get("userName", "Anonymous")
             }
             for review in result
         ]
@@ -757,7 +759,9 @@ async def analyze_reviews_direct(payload: DirectAnalysisRequest):
             formatted_review = {
                 "rating": int(rating),
                 "review": content,
-                "date": review.get('date', datetime.now().isoformat())
+                "date": review.get('date', datetime.now().isoformat()),
+                "thumbsUpCount": review.get('thumbsUpCount', 0),
+                "userName": review.get('userName', 'Anonymous')
             }
             formatted_reviews.append(formatted_review)
         
