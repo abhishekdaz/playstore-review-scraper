@@ -1222,7 +1222,7 @@ class ReviewAnalysisEngine:
                 
                 if not text:
                     continue
-                
+                    
                 found_categories = []
                 
                 # Classify based on configured categories
@@ -1400,7 +1400,7 @@ class ReviewAnalysisEngine:
                     'alert_level': 'HIGH',
                     'message': f"🚨 HIGH CRITICAL COMPLAINT RATE: {total_critical_count} critical complaints ({(total_critical_count/total_reviews)*100:.1f}% of reviews)",
                     'recommendation': 'Immediate attention required - multiple severe user complaints detected'
-                })
+                    })
             
             return {
                 'ux_issues': ux_summary,
@@ -2174,7 +2174,7 @@ class ReviewAnalysisEngine:
                 sentiment_results.append({
                     **review,
                     'sentiment_analysis': sentiment
-                })
+                    })
             
             # Aggregate sentiment statistics
             sentiment_counts = Counter([r['sentiment_analysis']['sentiment'] for r in sentiment_results])
@@ -3942,7 +3942,7 @@ class ReviewAnalysisEngine:
                 )
                 
                 logger.debug(f"Review rating: {rating}, sentiment: {sentiment_label}, vader: {vader_compound}, textblob: {textblob_polarity}, is_negative: {is_negative}")
-                
+                    
                 if is_negative:
                     # Normalize review structure for analysis
                     normalized_review = {
@@ -4210,67 +4210,229 @@ class ReviewAnalysisEngine:
             theme_reviews["General Complaints"] = unmatched_reviews
         
         # Convert to cluster format
-        clusters = {}
-        cluster_id = 0
+            clusters = {}
+            cluster_id = 0
         for theme, reviews in theme_reviews.items():
             if reviews:  # Only include non-empty themes
                 clusters[cluster_id] = reviews
                 cluster_id += 1
-        
-        return clusters
-    
-    def _generate_theme_name(self, cluster_reviews):
-        """Generate a human-readable theme name based on cluster content"""
-        try:
-            # Extract common keywords and phrases
-            texts = [review.get('content', '').lower() for review in cluster_reviews]
-            combined_text = ' '.join(texts)
             
-            # Common complaint patterns
-            patterns = {
-                "Payment Failures": ["payment", "pay", "charge", "billing", "refund", "money"],
-                "Login Problems": ["login", "sign in", "account", "password", "access"],
-                "App Crashes": ["crash", "freeze", "hang", "stop", "close", "shut"],
-                "Slow Performance": ["slow", "lag", "loading", "speed", "fast"],
-                "Scam Reports": ["scam", "fraud", "fake", "spam", "cheat", "steal"],
-                "Technical Bugs": ["bug", "error", "glitch", "broken", "not work"],
-                "UI/UX Issues": ["confusing", "hard", "difficult", "interface", "design"],
-                "Missing Features": ["need", "want", "add", "missing", "should have"],
-                "Customer Service": ["support", "help", "service", "response", "contact"],
-                "Data Loss": ["lost", "delete", "missing", "gone", "disappear"],
-                "Subscription Issues": ["subscription", "cancel", "trial", "auto", "renew"],
-                "Update Problems": ["update", "version", "new", "change", "different"]
+        return clusters
+            
+    def _generate_theme_name(self, cluster_reviews):
+        """Generate a human-readable theme name using dynamic phrase extraction"""
+        try:
+            # Extract all review content
+            texts = [review.get('content', '') for review in cluster_reviews]
+            combined_text = ' '.join(texts).lower()
+            
+            # Step 1: Dynamic phrase extraction using most frequent 2-3 word phrases
+            if SKLEARN_AVAILABLE:
+                try:
+                    from sklearn.feature_extraction.text import CountVectorizer
+                    
+                    # Extract meaningful phrases
+                    vectorizer = CountVectorizer(
+                        ngram_range=(2, 3),
+                        max_features=20,
+                        stop_words='english',
+                        lowercase=True,
+                        min_df=max(1, len(cluster_reviews) // 3)  # Must appear in at least 1/3 of reviews
+                    )
+                    
+                    phrase_matrix = vectorizer.fit_transform(texts)
+                    feature_names = vectorizer.get_feature_names_out()
+                    phrase_frequencies = phrase_matrix.sum(axis=0).A1
+                    
+                    # Get top phrases with their frequencies
+                    top_phrases = [(feature_names[i], phrase_frequencies[i]) 
+                                 for i in range(len(feature_names))]
+                    top_phrases.sort(key=lambda x: x[1], reverse=True)
+                    
+                    # Step 2: Convert top phrases to readable theme names
+                    for phrase, freq in top_phrases[:5]:
+                        theme_name = self._phrase_to_theme_name(phrase, combined_text)
+                        if theme_name != "General Issues":
+                            return theme_name
+            
+        except Exception as e:
+                    logger.warning(f"Dynamic phrase extraction failed: {e}")
+            
+            # Step 3: Fallback to enhanced keyword patterns (more comprehensive)
+            pattern_weights = {
+                "Payment & Billing Issues": {
+                    "keywords": ["payment", "pay", "charge", "billing", "refund", "money", "cost", "price", "transaction", "credit card"],
+                    "weight": 1.5  # Higher weight for critical issues
+                },
+                "Fraudulent Activity Reports": {
+                    "keywords": ["scam", "fraud", "fake", "spam", "cheat", "steal", "suspicious", "illegal", "unauthorized"],
+                    "weight": 2.0  # Highest weight for fraud
+                },
+                "Login & Authentication": {
+                    "keywords": ["login", "sign in", "account", "password", "access", "verification", "authenticate", "locked"],
+                    "weight": 1.3
+                },
+                "App Performance Issues": {
+                    "keywords": ["crash", "freeze", "hang", "stop", "close", "shut", "slow", "lag", "loading", "performance"],
+                    "weight": 1.4
+                },
+                "Technical Errors & Bugs": {
+                    "keywords": ["bug", "error", "glitch", "broken", "not work", "malfunction", "issue", "problem"],
+                    "weight": 1.2
+                },
+                "User Experience Problems": {
+                    "keywords": ["confusing", "hard", "difficult", "interface", "design", "navigation", "usability"],
+                    "weight": 1.0
+                },
+                "Feature Requests": {
+                    "keywords": ["need", "want", "add", "missing", "should have", "improvement", "better", "enhance"],
+                    "weight": 0.8
+                },
+                "Customer Support Issues": {
+                    "keywords": ["support", "help", "service", "response", "contact", "customer service", "no response"],
+                    "weight": 1.1
+                },
+                "Data & Privacy Concerns": {
+                    "keywords": ["lost", "delete", "missing", "gone", "disappear", "privacy", "data", "security"],
+                    "weight": 1.3
+                },
+                "Subscription & Account": {
+                    "keywords": ["subscription", "cancel", "trial", "auto", "renew", "billing cycle", "premium"],
+                    "weight": 1.0
+                },
+                "Update & Compatibility": {
+                    "keywords": ["update", "version", "new", "change", "different", "compatibility", "device"],
+                    "weight": 0.9
+                }
             }
             
-            # Score each pattern
+            # Calculate weighted scores
             pattern_scores = {}
-            for pattern_name, keywords in patterns.items():
-                score = sum(combined_text.count(keyword) for keyword in keywords)
-                if score > 0:
-                    pattern_scores[pattern_name] = score
+            for pattern_name, pattern_data in pattern_weights.items():
+                keywords = pattern_data["keywords"]
+                weight = pattern_data["weight"]
+                
+                # Count keyword occurrences with context awareness
+                score = 0
+                for keyword in keywords:
+                    # Basic keyword count
+                    basic_count = combined_text.count(keyword)
+                    
+                    # Bonus for exact phrase matches
+                    for text in texts:
+                        if keyword in text.lower():
+                            score += 1
+                    
+                    score += basic_count
+                
+                # Apply weight multiplier
+                weighted_score = score * weight
+                
+                if weighted_score > 0:
+                    pattern_scores[pattern_name] = weighted_score
             
             # Return the highest scoring pattern
             if pattern_scores:
-                return max(pattern_scores.items(), key=lambda x: x[1])[0]
+                best_theme = max(pattern_scores.items(), key=lambda x: x[1])[0]
+                return best_theme
             else:
-                return "General Complaints"
+                return "General User Complaints"
                 
         except Exception as e:
             logger.warning(f"Could not generate theme name: {e}")
-            return "General Complaints"
+            return "General User Complaints"
+    
+    def _phrase_to_theme_name(self, phrase, context_text):
+        """Convert extracted phrase to readable theme name"""
+        phrase = phrase.lower().strip()
+        
+        # Dynamic phrase mapping with context awareness
+        phrase_patterns = {
+            # Payment/Money related
+            r'(payment|pay|charge|billing|refund|money|transaction)': "Payment & Billing Issues",
+            r'(credit card|paypal|bank)': "Payment & Billing Issues",
+            
+            # Fraud/Scam related  
+            r'(scam|fraud|fake|cheat|steal|suspicious)': "Fraudulent Activity Reports",
+            r'(money back|rip off|dishonest)': "Fraudulent Activity Reports",
+            
+            # Performance issues
+            r'(app crash|keeps crash|always crash|freeze|hang)': "App Performance Issues", 
+            r'(slow|lag|loading|performance|speed)': "App Performance Issues",
+            
+            # Login/Account
+            r'(login|sign in|account|password|access|verification)': "Login & Authentication",
+            r'(locked out|cannot access|forgot password)': "Login & Authentication",
+            
+            # Technical issues
+            r'(bug|error|glitch|broken|not work|malfunction)': "Technical Errors & Bugs",
+            r'(doesn work|stops working|not working)': "Technical Errors & Bugs",
+            
+            # UI/UX
+            r'(confusing|hard use|difficult|interface|design)': "User Experience Problems",
+            r'(navigation|menu|button|layout)': "User Experience Problems",
+            
+            # Customer service
+            r'(customer|support|help|service|response|contact)': "Customer Support Issues",
+            r'(no response|poor support|unresponsive)': "Customer Support Issues",
+            
+            # Features
+            r'(missing|need|want|add|should have|improvement)': "Feature Requests",
+            r'(better|enhance|update needed|would like)': "Feature Requests"
+        }
+        
+        import re
+        for pattern, theme_name in phrase_patterns.items():
+            if re.search(pattern, phrase):
+                return theme_name
+        
+        # If no pattern matches, create descriptive name from phrase
+        if len(phrase.split()) >= 2:
+            # Capitalize first letter of each meaningful word
+            words = phrase.split()
+            meaningful_words = [w.capitalize() for w in words if len(w) > 2]
+            if meaningful_words:
+                return f"{' '.join(meaningful_words[:3])} Issues"
+        
+        return "General Issues"
     
     def _get_representative_complaints(self, theme_reviews):
-        """Get top 2-3 representative complaints with highlights"""
+        """Get top 2-3 representative complaints with highlights and ensure highest helpful votes are included"""
         try:
-            # Sort by helpfulness and recency
-            sorted_reviews = sorted(theme_reviews, key=lambda r: (
-                r.get('thumbsUpCount', 0),
-                len(r.get('content', ''))
-            ), reverse=True)
+            if not theme_reviews:
+                return []
             
+            # Sort ALL reviews by helpfulness first to ensure we don't miss high helpful vote reviews
+            all_sorted_by_helpfulness = sorted(theme_reviews, key=lambda r: r.get('thumbsUpCount', 0), reverse=True)
+            
+            # Always include the most helpful review from this theme
+            most_helpful = all_sorted_by_helpfulness[0]
             representative = []
-            for review in sorted_reviews[:3]:
-                # Extract key phrases from the review
+            
+            # Add most helpful review first
+            content = most_helpful.get('content', '')
+            highlights = self._extract_highlights(content)
+            
+            representative.append({
+                "text": content[:200] + "..." if len(content) > 200 else content,
+                "rating": most_helpful.get('score', most_helpful.get('rating', 1)),
+                "thumbsUpCount": most_helpful.get('thumbsUpCount', 0),
+                "date": self._format_review_date(most_helpful.get('at', 'Unknown')),
+                "highlights": highlights[:3],  # Top 3 highlights
+                "selection_reason": f"Most helpful in theme ({most_helpful.get('thumbsUpCount', 0)} votes)"
+            })
+            
+            # Sort by combined helpfulness and content quality for remaining selections
+            remaining_reviews = [r for r in theme_reviews if r != most_helpful]
+            if remaining_reviews:
+                combined_sorted = sorted(remaining_reviews, key=lambda r: (
+                    r.get('thumbsUpCount', 0) * 2,  # Weight helpfulness higher
+                    len(r.get('content', '')),
+                    5 - r.get('score', r.get('rating', 3))  # Lower rating = higher priority
+                ), reverse=True)
+                
+                # Add up to 2 more representative reviews
+                for review in combined_sorted[:2]:
                 content = review.get('content', '')
                 highlights = self._extract_highlights(content)
                 
@@ -4279,7 +4441,8 @@ class ReviewAnalysisEngine:
                     "rating": review.get('score', review.get('rating', 1)),
                     "thumbsUpCount": review.get('thumbsUpCount', 0),
                     "date": self._format_review_date(review.get('at', 'Unknown')),
-                    "highlights": highlights[:3]  # Top 3 highlights
+                        "highlights": highlights[:3],  # Top 3 highlights
+                        "selection_reason": f"Representative complaint ({review.get('thumbsUpCount', 0)} votes)"
                 })
             
             return representative

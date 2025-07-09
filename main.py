@@ -15,6 +15,7 @@ import pandas as pd
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import asyncio
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from analysis_engine import ReviewAnalysisEngine, CategoryConfig
 
@@ -153,7 +154,7 @@ APP_TYPE_CONFIGS = {
 class ReviewRequest(BaseModel):
     """Request model for fetching app reviews"""
     url: str = Field(..., description="Play Store URL of the app")
-    count: int = Field(default=100, ge=1, le=5000, description="Number of reviews to fetch (1-5000)")
+    count: Optional[int] = Field(default=None, description="Number of reviews to fetch (None for all available)")
     star_filters: Optional[List[int]] = Field(default=None, description="List of star ratings to filter by (1-5)")
     negative_only: bool = Field(default=False, description="Export only negative reviews (1-2 stars)")
     export_format: str = Field(default="csv", description="Export format: 'csv' or 'xlsx'")
@@ -341,9 +342,6 @@ def get_app_metadata(app_id: str) -> Dict[str, Any]:
         Dictionary containing app metadata or empty dict if failed
     """
     try:
-        if not SCRAPER_AVAILABLE:
-            return {}
-            
         app_info = app(app_id, lang="en", country="us")
         
         # Extract relevant metadata
@@ -441,21 +439,81 @@ async def get_reviews(payload: ReviewRequest):
         if not app_id:
             raise HTTPException(status_code=400, detail="Invalid Play Store URL")
         
-        # Fetch reviews using google-play-scraper
-        result, _ = reviews(
-            app_id, 
-            lang="en", 
-            country="us", 
-            sort=Sort.NEWEST, 
-            count=payload.count
-        )
+        # Handle unlimited reviews (paginated fetching)
+        if payload.count is None:
+            # Fetch all available reviews in batches
+            all_reviews = []
+            batch_size = 200
+            continuation_token = None
+            
+            logger.info("Starting paginated fetch for unlimited reviews...")
+            batch_count = 1
+            
+            while True:
+                try:
+                    logger.info(f"Fetching batch {batch_count}: {batch_size} reviews...")
+                    
+                    if continuation_token:
+                        batch_result, continuation_token = reviews(
+                            app_id,
+                            lang="en",
+                            country="us", 
+                            sort=Sort.NEWEST,
+                            count=batch_size,
+                            continuation_token=continuation_token
+                        )
+                    else:
+                        batch_result, continuation_token = reviews(
+                            app_id,
+                            lang="en",
+                            country="us", 
+                            sort=Sort.NEWEST,
+                            count=batch_size
+                        )
+                    
+                    if not batch_result:
+                        logger.info("No more reviews available")
+                        break
+                        
+                    all_reviews.extend(batch_result)
+                    logger.info(f"Batch {batch_count} completed: {len(batch_result)} reviews (total: {len(all_reviews)})")
+                    
+                    # Break if no continuation token (end of reviews)
+                    if not continuation_token:
+                        logger.info("Reached end of available reviews")
+                        break
+                        
+                    batch_count += 1
+                    
+                    # Safety limit to prevent infinite loops
+                    if len(all_reviews) >= 10000:
+                        logger.info("Reached safety limit of 10,000 reviews")
+                        break
+                        
+                except Exception as batch_error:
+                    logger.error(f"Error in batch {batch_count}: {batch_error}")
+                    break
+                    
+            result = all_reviews
+            logger.info(f"Pagination completed: {len(result)} reviews fetched")
+        else:
+            # Fetch specific count
+            result, _ = reviews(
+                app_id, 
+                lang="en", 
+                country="us", 
+                sort=Sort.NEWEST, 
+                count=payload.count
+            )
         
         # Format reviews
         formatted_reviews = [
             {
                 "rating": review["score"], 
                 "review": review["content"] or "No review text", 
-                "date": review["at"].isoformat()
+                "date": review["at"].isoformat(),
+                "thumbsUpCount": review.get("thumbsUpCount", 0),
+                "userName": review.get("userName", "Anonymous")
             }
             for review in result
         ]
@@ -471,6 +529,13 @@ async def get_reviews(payload: ReviewRequest):
             if rating_str in rating_distribution:
                 rating_distribution[rating_str] += 1
         
+        # Get top helpful reviews (most helpful positive and negative)
+        positive_reviews = [r for r in formatted_reviews if r["rating"] >= 4]
+        negative_reviews = [r for r in formatted_reviews if r["rating"] <= 2]
+        
+        top_helpful_positive = sorted(positive_reviews, key=lambda x: x["thumbsUpCount"], reverse=True)[:5]
+        top_helpful_negative = sorted(negative_reviews, key=lambda x: x["thumbsUpCount"], reverse=True)[:5]
+
         # Fetch app metadata for total stats
         app_metadata = get_app_metadata(app_id)
         
@@ -481,6 +546,10 @@ async def get_reviews(payload: ReviewRequest):
             "total_fetched": len(result),  # Total before filtering
             "rating_distribution": rating_distribution,
             "app_metadata": app_metadata,  # Total app stats from Play Store
+            "top_helpful_reviews": {
+                "positive": top_helpful_positive,
+                "negative": top_helpful_negative
+            },
             "requested_count": payload.count,
             "applied_filters": payload.star_filters or [],
             "fetch_timestamp": datetime.now().isoformat()
@@ -515,12 +584,13 @@ async def export_reviews_csv(payload: ReviewRequest):
             raise HTTPException(status_code=400, detail="Invalid Play Store URL")
         
         # Fetch reviews (reuse logic from get_reviews)
+        count_to_use = payload.count if payload.count is not None else 1000  # Default to 1000 for CSV export
         result, _ = reviews(
             app_id, 
             lang="en", 
             country="us", 
             sort=Sort.NEWEST, 
-            count=payload.count
+            count=count_to_use
         )
         
         # Format reviews
@@ -528,7 +598,9 @@ async def export_reviews_csv(payload: ReviewRequest):
             {
                 "rating": review["score"], 
                 "review": review["content"] or "No review text", 
-                "date": review["at"].isoformat()
+                "date": review["at"].isoformat(),
+                "thumbsUpCount": review.get("thumbsUpCount", 0),
+                "userName": review.get("userName", "Anonymous")
             }
             for review in result
         ]
@@ -602,7 +674,9 @@ async def analyze_reviews(payload: AnalysisRequest):
             {
                 "rating": review["score"], 
                 "review": review["content"] or "No review text", 
-                "date": review["at"].isoformat()
+                "date": review["at"].isoformat(),
+                "thumbsUpCount": review.get("thumbsUpCount", 0),
+                "userName": review.get("userName", "Anonymous")
             }
             for review in result
         ]
@@ -685,7 +759,9 @@ async def analyze_reviews_direct(payload: DirectAnalysisRequest):
             formatted_review = {
                 "rating": int(rating),
                 "review": content,
-                "date": review.get('date', datetime.now().isoformat())
+                "date": review.get('date', datetime.now().isoformat()),
+                "thumbsUpCount": review.get('thumbsUpCount', 0),
+                "userName": review.get('userName', 'Anonymous')
             }
             formatted_reviews.append(formatted_review)
         
@@ -1086,6 +1162,254 @@ async def segment_reviews_by_themes(payload: DirectAnalysisRequest):
     except Exception as e:
         logger.error(f"Review segmentation error: {e}")
         raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(e)}")
+
+@app.post("/reviews/helpful", response_model=Dict[str, Any], tags=["Reviews"])
+async def get_helpful_reviews(payload: ReviewRequest):
+    """
+    Fetch the most helpful positive and negative reviews for a specific app
+    
+    Args:
+        payload: Review request containing URL and count
+        
+    Returns:
+        Dictionary containing top helpful positive and negative reviews
+        
+    Raises:
+        HTTPException: If URL is invalid or review fetching fails
+    """
+    try:
+        # Extract app ID from URL
+        app_id = extract_app_id_from_url(payload.url)
+        if not app_id:
+            raise HTTPException(status_code=400, detail="Invalid Play Store URL")
+        
+        # Fetch reviews using google-play-scraper, sorted by helpfulness if possible
+        count_to_use = payload.count if payload.count is not None else 1000  # Default to 1000 for helpful reviews
+        result, _ = reviews(
+            app_id, 
+            lang="en", 
+            country="us", 
+            sort=Sort.NEWEST,  # We'll sort by helpfulness manually
+            count=count_to_use
+        )
+        
+        # Format reviews with helpfulness data
+        formatted_reviews = [
+            {
+                "rating": review["score"], 
+                "review": review["content"] or "No review text", 
+                "date": review["at"].isoformat(),
+                "thumbsUpCount": review.get("thumbsUpCount", 0),
+                "userName": review.get("userName", "Anonymous"),
+                "reviewId": review.get("reviewId", "")
+            }
+            for review in result
+        ]
+        
+        # Separate into positive and negative reviews
+        positive_reviews = [r for r in formatted_reviews if r["rating"] >= 4]
+        negative_reviews = [r for r in formatted_reviews if r["rating"] <= 2]
+        
+        # Sort by helpfulness (thumbsUpCount) and get top reviews
+        top_helpful_positive = sorted(positive_reviews, key=lambda x: x["thumbsUpCount"], reverse=True)[:10]
+        top_helpful_negative = sorted(negative_reviews, key=lambda x: x["thumbsUpCount"], reverse=True)[:10]
+        
+        return {
+            "app_id": app_id,
+            "helpful_reviews": {
+                "positive": {
+                    "title": "Most Helpful Positive Reviews",
+                    "description": "Reviews with 4-5 stars sorted by helpfulness (thumbs up)",
+                    "reviews": top_helpful_positive,
+                    "total_count": len(positive_reviews)
+                },
+                "negative": {
+                    "title": "Most Helpful Negative Reviews", 
+                    "description": "Reviews with 1-2 stars sorted by helpfulness (thumbs up)",
+                    "reviews": top_helpful_negative,
+                    "total_count": len(negative_reviews)
+                }
+            },
+            "total_reviews_analyzed": len(formatted_reviews),
+            "fetch_timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to fetch helpful reviews: {str(e)}"
+        )
+
+@app.post("/analyze/enhanced", response_model=Dict[str, Any], tags=["Analysis"])
+async def analyze_reviews_enhanced_pipeline(payload: DirectAnalysisRequest):
+    """
+    Analyze reviews using the enhanced sentiment and issue extraction pipeline
+    
+    Features:
+    - RoBERTa sentiment analysis
+    - KeyBERT phrase extraction with maxsum and trigrams
+    - Fraud/money/update detection using patterns and SpaCy
+    - Severity classification (Minor, Severe, Critical)
+    - Agglomerative clustering of similar complaints
+    """
+    try:
+        logger.info("Starting enhanced pipeline analysis...")
+        
+        if not payload.reviews:
+            raise HTTPException(status_code=400, detail="No reviews provided for analysis")
+        
+        if len(payload.reviews) > 1000:
+            raise HTTPException(status_code=400, detail="Maximum 1000 reviews allowed for enhanced analysis")
+        
+        # Run enhanced pipeline analysis
+        pipeline_result = analysis_engine.enhanced_pipeline.process_reviews_batch(payload.reviews)
+        
+        # Extract cluster information for easy access
+        clusters_summary = []
+        if 'clusters' in pipeline_result.get('clustering', {}):
+            for cluster_id, cluster_data in pipeline_result['clustering']['clusters'].items():
+                clusters_summary.append({
+                    'cluster_id': cluster_id,
+                    'complaint_count': cluster_data.get('count', 0),
+                    'top_phrases': cluster_data.get('top_complaint_phrases', [])[:3],
+                    'dominant_severity': cluster_data.get('dominant_severity', 'minor'),
+                    'money_involved_percentage': cluster_data.get('money_involved_percentage', 0),
+                    'update_related_percentage': cluster_data.get('update_related_percentage', 0),
+                    'sample_review': cluster_data.get('sample_reviews', [{}])[0].get('text', '') if cluster_data.get('sample_reviews') else ''
+                })
+        
+        # Sort clusters by count (most common complaints first)
+        clusters_summary.sort(key=lambda x: x['complaint_count'], reverse=True)
+        
+        return {
+            "analysis_type": "enhanced_sentiment_pipeline",
+            "total_reviews_processed": pipeline_result.get('total_processed', 0),
+            "pipeline_summary": pipeline_result.get('summary', {}),
+            "clusters_summary": clusters_summary,
+            "detailed_clustering": pipeline_result.get('clustering', {}),
+            "individual_review_analyses": pipeline_result.get('individual_analyses', [])[:20],  # Limit to first 20 for response size
+            "metadata": {
+                "models_used": {
+                    "sentiment": "cardiffnlp/twitter-roberta-base-sentiment-latest",
+                    "phrase_extraction": "KeyBERT with all-MiniLM-L6-v2",
+                    "clustering": pipeline_result.get('clustering', {}).get('clustering_method', 'fallback'),
+                    "dependency_parsing": "SpaCy en_core_web_sm" if analysis_engine.enhanced_pipeline.spacy_nlp else "Pattern-based fallback"
+                },
+                "analysis_features": [
+                    "RoBERTa sentiment classification",
+                    "KeyBERT maxsum phrase extraction",
+                    "Trigram complaint analysis",
+                    "Fraud/money/update detection",
+                    "Severity classification (Critical/Severe/Minor)",
+                    "Agglomerative clustering"
+                ]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in enhanced pipeline analysis: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Enhanced analysis failed: {str(e)}")
+
+@app.post("/analyze/cluster_phrases", response_model=Dict[str, Any], tags=["Analysis"])
+async def extract_cluster_complaint_phrases(payload: DirectAnalysisRequest):
+    """
+    Extract frequent complaint phrases from clustered negative reviews.
+    
+    Returns phrases grouped by cluster with frequency and severity data.
+    Perfect for displaying in Critical Theme Analysis sections.
+    
+    Output format:
+    {
+      "cluster_phrases": {
+        2: [
+          {"phrase": "paid but not credited", "frequency": 12, "avg_severity": 0.91},
+          {"phrase": "refund not received", "frequency": 9, "avg_severity": 0.89}
+        ]
+      }
+    }
+    """
+    try:
+        if not ANALYSIS_ENABLED:
+            raise HTTPException(status_code=503, detail="Analysis engine not available")
+        
+        # Validate and prepare reviews
+        reviews = payload.reviews
+        if not reviews:
+            raise HTTPException(status_code=400, detail="No reviews provided")
+        
+        # Normalize review format
+        normalized_reviews = []
+        for review in reviews:
+            # Handle different content field names
+            content = review.get('content') or review.get('review') or review.get('text', '')
+            if not content:
+                continue
+                
+            # Get cluster assignment (default to 0 if not provided)
+            cluster = review.get('cluster', 0)
+            
+            # Get sentiment data
+            sentiment = review.get('sentiment', {})
+            if not isinstance(sentiment, dict):
+                # If sentiment is just a score, convert to dict format
+                sentiment = {'score': sentiment if isinstance(sentiment, (int, float)) else 0.5}
+            
+            normalized_reviews.append({
+                'content': content,
+                'cluster': cluster,
+                'sentiment': sentiment,
+                'rating': review.get('rating', 3)
+            })
+        
+        if not normalized_reviews:
+            return {"success": True, "cluster_phrases": {}, "total_reviews": 0}
+        
+        # Filter for negative reviews only (assuming negative sentiment scores > 0.5 or rating <= 2)
+        negative_reviews = []
+        for review in normalized_reviews:
+            # Check if review is negative based on sentiment score or rating
+            is_negative = False
+            
+            # Check sentiment score
+            sentiment_score = review['sentiment'].get('score', 0.5)
+            if sentiment_score > 0.5:  # Higher score = more negative
+                is_negative = True
+            
+            # Also check rating if available
+            rating = review.get('rating', 3)
+            if rating <= 2:
+                is_negative = True
+            
+            if is_negative:
+                negative_reviews.append(review)
+        
+        if not negative_reviews:
+            return {
+                "success": True, 
+                "cluster_phrases": {}, 
+                "total_reviews": len(normalized_reviews), 
+                "negative_reviews": 0
+            }
+        
+        # Extract cluster complaint phrases
+        cluster_phrases = analysis_engine.extract_cluster_complaint_phrases(negative_reviews)
+        
+        return {
+            "success": True,
+            "cluster_phrases": cluster_phrases,
+            "total_reviews": len(normalized_reviews),
+            "negative_reviews": len(negative_reviews),
+            "clusters_processed": len(cluster_phrases),
+            "processing_timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Cluster phrase extraction failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 # ===== APPLICATION STARTUP =====
 if __name__ == "__main__":
