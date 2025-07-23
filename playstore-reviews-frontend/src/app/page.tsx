@@ -310,12 +310,13 @@ interface SentimentSeparationResults {
 
 // ===== CONSTANTS =====
 const REVIEW_COUNT_OPTIONS = [
-  { value: 500, label: "500 reviews" },
   { value: 1000, label: "1,000 reviews" },
   { value: 2000, label: "2,000 reviews" },
   { value: 5000, label: "5,000 reviews" },
   { value: 10000, label: "10,000 reviews" },
-  { value: -1, label: "All reviews" }
+  { value: 20000, label: "20,000 reviews" },
+  { value: 30000, label: "30,000 reviews" },
+  { value: -1, label: "All reviews (up to 30k latest)" }
 ];
 
 const STAR_RATINGS = [1, 2, 3, 4, 5];

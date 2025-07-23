@@ -167,7 +167,7 @@ class SearchRequest(BaseModel):
 class AnalysisRequest(BaseModel):
     """Request model for comprehensive review analysis"""
     url: str = Field(..., description="Play Store URL of the app")
-    count: int = Field(default=100, ge=10, le=1000, description="Number of reviews for analysis (10-1000)")
+    count: int = Field(default=100, ge=10, le=30000, description="Number of reviews for analysis (10-30000)")
     star_filters: Optional[List[int]] = Field(default=None, description="List of star ratings to filter by (1-5)")
     include_sentiment: bool = Field(default=True, description="Include sentiment analysis")
     include_topics: bool = Field(default=True, description="Include topic modeling")
