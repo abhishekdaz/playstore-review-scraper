@@ -70,7 +70,7 @@ node_modules/
 
 # Data files
 *.csv
-*.json
+/backend/*.json
 data/
 downloads/
 
